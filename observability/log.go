@@ -155,9 +155,6 @@ func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 		return
 	}
 
-	// Temporary debugging
-	slog.Info("handleOTLP", "level", r.Level, "msg", r.Message)
-
 	otelAttrs := make([]attribute.KeyValue, 0, len(slogAttrs))
 	for _, a := range slogAttrs {
 		otelAttrs = append(otelAttrs, toOtelAttribute(a))

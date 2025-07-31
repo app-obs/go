@@ -123,14 +123,19 @@ func (h *APMHandler) Handle(ctx context.Context, r slog.Record) error {
 	switch h.apmType {
 	case OTLP:
 		h.handleOTLP(ctx, r, attrs)
-	case DataDog:
-		h.handleDataDog(ctx, r, attrs)
+	case Datadog:
+		h.handleDatadog(ctx, r, attrs)
+	case None:
+		// Do nothing
 	}
 
 	return h.Handler.Handle(ctx, r)
 }
 
 func (h *APMHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string) {
+	if h.apmType == None {
+		return "", ""
+	}
 	if h.apmType == OTLP {
 		span := trace.SpanFromContext(ctx)
 		if span.SpanContext().HasTraceID() {
@@ -139,7 +144,7 @@ func (h *APMHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string
 		if span.SpanContext().HasSpanID() {
 			spanID = span.SpanContext().SpanID().String()
 		}
-	} else if h.apmType == DataDog {
+	} else if h.apmType == Datadog {
 		if ddSpan, ok := tracer.SpanFromContext(ctx); ok {
 			traceID = fmt.Sprintf("%d", ddSpan.Context().TraceID())
 			spanID = fmt.Sprintf("%d", ddSpan.Context().SpanID())
@@ -169,7 +174,7 @@ func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 	}
 }
 
-func (h *APMHandler) handleDataDog(ctx context.Context, r slog.Record, attrs []slog.Attr) {
+func (h *APMHandler) handleDatadog(ctx context.Context, r slog.Record, attrs []slog.Attr) {
 	if ddSpan, ok := tracer.SpanFromContext(ctx); ok {
 		for _, a := range attrs {
 			ddSpan.SetTag(a.Key, a.Value.String())

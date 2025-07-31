@@ -24,9 +24,9 @@ type Observability struct {
 // trace context from an incoming HTTP request.
 func NewObservabilityFromRequest(r *http.Request, serviceName string, apmType string) *Observability {
 	var ctx context.Context
-	typedAPMType := APMType(apmType)
+	typedAPMType := normalizeAPMType(apmType)
 	// For OTLP, we need to manually extract the context from the headers.
-	// For DataDog, the tracer does this automatically when starting a span.
+	// For Datadog, the tracer does this automatically when starting a span.
 	if typedAPMType == OTLP {
 		ctx = otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	} else {
@@ -37,7 +37,7 @@ func NewObservabilityFromRequest(r *http.Request, serviceName string, apmType st
 
 // NewObservability creates a new Observability instance.
 func NewObservability(ctx context.Context, serviceName string, apmType string) *Observability {
-	typedAPMType := APMType(apmType)
+	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
 		ctx: ctx,
 	}

@@ -26,6 +26,15 @@ type Span interface {
 	SetAttributes(...attribute.KeyValue)
 }
 
+// noOpSpan is a no-op implementation of the Span interface.
+type noOpSpan struct{}
+
+func (s *noOpSpan) End()                                     {}
+func (s *noOpSpan) AddEvent(string, ...trace.EventOption)    {}
+func (s *noOpSpan) RecordError(error, ...trace.EventOption)  {}
+func (s *noOpSpan) SetStatus(codes.Code, string)             {}
+func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
+
 // Tracer is an interface for a tracer.
 type Tracer interface {
 	Start(ctx context.Context, spanName string) (context.Context, Span)
@@ -43,7 +52,7 @@ type unifiedSpan struct {
 // End ends the span based on the APM type.
 func (s *unifiedSpan) End() {
 	s.obs.SetContext(s.parentCtx)
-	if s.apmType == DataDog {
+	if s.apmType == Datadog {
 		s.ddSpan.Finish()
 	} else {
 		s.Span.End()
@@ -52,7 +61,7 @@ func (s *unifiedSpan) End() {
 
 // AddEvent adds an event to the span.
 func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
-	if s.apmType == DataDog {
+	if s.apmType == Datadog {
 		s.ddSpan.SetTag("event", name)
 	} else {
 		s.Span.AddEvent(name, options...)
@@ -61,7 +70,7 @@ func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
 
 // RecordError records an error on the span.
 func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
-	if s.apmType == DataDog {
+	if s.apmType == Datadog {
 		s.ddSpan.SetTag("error", err)
 	} else {
 		s.Span.RecordError(err, options...)
@@ -70,7 +79,7 @@ func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
 
 // SetStatus sets the status of the span.
 func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
-	if s.apmType == DataDog {
+	if s.apmType == Datadog {
 		s.ddSpan.SetTag("status", description)
 	} else {
 		s.Span.SetStatus(code, description)
@@ -79,7 +88,7 @@ func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
 
 // SetAttributes sets attributes on the span.
 func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
-	if s.apmType == DataDog {
+	if s.apmType == Datadog {
 		for _, attr := range attrs {
 			s.ddSpan.SetTag(string(attr.Key), attr.Value.AsString())
 		}
@@ -96,8 +105,13 @@ type unifiedTracer struct {
 
 // Start creates a new span based on the APM type.
 func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Context, Span) {
-	parentCtx := t.obs.Context()
 	apmType := t.obs.Trace.apmType
+
+	if apmType == None {
+		return ctx, &noOpSpan{}
+	}
+
+	parentCtx := t.obs.Context()
 
 	span := &unifiedSpan{
 		obs:       t.obs,
@@ -106,7 +120,7 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 	}
 
 	var newCtx context.Context
-	if apmType == DataDog {
+	if apmType == Datadog {
 		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
 		span.ddSpan = ddSpan
 		newCtx = newDdCtx
@@ -139,18 +153,28 @@ func NewTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 
 // SetupTracing initializes and configures the global TracerProvider based on APM type.
 func SetupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, apmType string) (Shutdowner, error) {
-	switch APMType(apmType) {
+	switch normalizeAPMType(apmType) {
 	case OTLP:
 		return setupOTLP(ctx, serviceName, serviceApp, serviceEnv, apmURL)
-	case DataDog:
-		return setupDataDog(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+	case Datadog:
+		return setupDatadog(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+	case None:
+		return &noOpShutdowner{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported APM type: %s", apmType)
 	}
 }
 
-// setupDataDog configures and initializes the DataDog Tracer.
-func setupDataDog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
+// noOpShutdowner implements the Shutdowner interface for the None APM type.
+type noOpShutdowner struct{}
+
+// Shutdown is a no-op.
+func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
+	return nil
+}
+
+// setupDatadog configures and initializes the Datadog Tracer.
+func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
 	tracer.Start(
 		tracer.WithService(serviceName),
 		tracer.WithEnv(serviceEnv),
@@ -158,20 +182,20 @@ func setupDataDog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmU
 		tracer.WithAgentAddr(apmURL),
 	)
 
-	obs := NewObservability(ctx, serviceName, string(DataDog))
-	obs.Log.Info("DataDog Tracer initialized successfully",
+	obs := NewObservability(ctx, serviceName, string(Datadog))
+	obs.Log.Info("Datadog Tracer initialized successfully",
 		"APMURL", apmURL,
-		"APMType", DataDog,
+		"APMType", Datadog,
 	)
 
-	return &dataDogShutdowner{}, nil
+	return &datadogShutdowner{}, nil
 }
 
-// dataDogShutdowner implements the Shutdowner interface for DataDog.
-type dataDogShutdowner struct{}
+// datadogShutdowner implements the Shutdowner interface for Datadog.
+type datadogShutdowner struct{}
 
-// Shutdown stops the DataDog tracer.
-func (d *dataDogShutdowner) Shutdown(ctx context.Context) error {
+// Shutdown stops the Datadog tracer.
+func (d *datadogShutdowner) Shutdown(ctx context.Context) error {
 	tracer.Stop()
 	return nil
 }

@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// v0.250801.0325
+// v0.250801.1
 
 // Shutdowner defines a contract for components that can be gracefully shut down.
 type Shutdowner interface {

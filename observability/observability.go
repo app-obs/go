@@ -8,6 +8,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
+// v0.250801.0302
+
 // Shutdowner defines a contract for components that can be gracefully shut down.
 type Shutdowner interface {
 	Shutdown(ctx context.Context) error
@@ -43,7 +45,7 @@ func NewObservability(ctx context.Context, serviceName string, apmType string) *
 	}
 	baseLogger := InitLogger(typedAPMType)
 	obs.Trace = NewTrace(obs, serviceName, typedAPMType) // Pass obs and apmType to Trace
-	obs.Log = NewLog(obs, baseLogger)                   // Pass obs to Log
+	obs.Log = NewLog(obs, baseLogger)                    // Pass obs to Log
 	return obs
 }
 

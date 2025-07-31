@@ -155,6 +155,9 @@ func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 		return
 	}
 
+	// Temporary debugging
+	slog.Info("handleOTLP", "level", r.Level, "msg", r.Message)
+
 	otelAttrs := make([]attribute.KeyValue, 0, len(slogAttrs))
 	for _, a := range slogAttrs {
 		otelAttrs = append(otelAttrs, toOtelAttribute(a))
@@ -164,7 +167,7 @@ func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 		err := extractError(r)
 		span.RecordError(err, trace.WithAttributes(otelAttrs...))
 		span.SetStatus(codes.Error, r.Message)
-	} else {
+	} else if r.Level >= slog.LevelInfo {
 		span.AddEvent(r.Message, trace.WithAttributes(otelAttrs...))
 	}
 }
@@ -178,7 +181,7 @@ func (h *APMHandler) handleDataDog(ctx context.Context, r slog.Record, attrs []s
 		if r.Level >= slog.LevelError {
 			err := extractError(r)
 			ddSpan.SetTag("error", err)
-		} else {
+		} else if r.Level >= slog.LevelInfo {
 			ddSpan.SetTag("event", r.Message)
 		}
 	}

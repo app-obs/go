@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"go.opentelemetry.io/otel"
@@ -17,7 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Span is a unified interface for a trace span, wrapping both OTel and DataDog spans.
+// Span is a unified interface for a trace span, wrapping both OTel and Datadog spans.
 type Span interface {
 	End()
 	AddEvent(string, ...trace.EventOption)
@@ -42,7 +43,7 @@ type Tracer interface {
 
 // unifiedSpan is a concrete implementation of the Span interface.
 type unifiedSpan struct {
-	trace.Span    // OTel span
+	trace.Span // OTel span
 	ddSpan     *tracer.Span
 	obs        *Observability
 	parentCtx  context.Context
@@ -97,7 +98,7 @@ func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
 	}
 }
 
-// unifiedTracer is a unified tracer that can create either OTel or DataDog spans.
+// unifiedTracer is a unified tracer that can create either OTel or Datadog spans.
 type unifiedTracer struct {
 	obs    *Observability
 	tracer trace.Tracer // OTel tracer
@@ -148,6 +149,21 @@ func NewTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 			tracer: otel.Tracer(serviceName),
 		},
 		apmType: apmType,
+	}
+}
+
+// InjectHTTP injects the current trace context into the headers of an outgoing HTTP request.
+// It automatically handles the correct propagation format for the configured APM type.
+func (t *Trace) InjectHTTP(req *http.Request) {
+	switch t.apmType {
+	case OTLP:
+		otel.GetTextMapPropagator().Inject(t.obs.Context(), propagation.HeaderCarrier(req.Header))
+	case Datadog:
+		if span, ok := tracer.SpanFromContext(t.obs.Context()); ok {
+			tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
+		}
+	case None:
+		// Do nothing
 	}
 }
 

@@ -13,11 +13,12 @@ type Shutdowner interface {
 
 // Observability holds the tracing and logging components.
 type Observability struct {
-	Trace       *Trace
-	Log         *Log
-	ctx         context.Context
-	serviceName string
-	apmType     APMType
+	Trace        *Trace
+	Log          *Log
+	ErrorHandler *ErrorHandler
+	ctx          context.Context
+	serviceName  string
+	apmType      APMType
 }
 
 // NewObservability creates a new Observability instance.
@@ -29,8 +30,9 @@ func NewObservability(ctx context.Context, serviceName string, apmType string) *
 		apmType:     typedAPMType,
 	}
 	baseLogger := InitLogger(typedAPMType)
-	obs.Trace = NewTrace(obs, serviceName, typedAPMType) // Pass obs and apmType to Trace
-	obs.Log = NewLog(obs, baseLogger)                    // Pass obs to Log
+	obs.Trace = NewTrace(obs, serviceName, typedAPMType)
+	obs.Log = NewLog(obs, baseLogger)
+	obs.ErrorHandler = NewErrorHandler(obs) // Initialize the error handler
 	return obs
 }
 

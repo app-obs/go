@@ -10,11 +10,10 @@ import (
 // SpanAttributes provides a simpler, map-based way to define span attributes, similar to logrus.Fields.
 type SpanAttributes map[string]interface{}
 
-// StartSpan begins a new trace span, automatically converting a map of attributes to the required OpenTelemetry format.
-// It returns the new context, the created span, and the observability instance for further use (e.g., logging).
-func StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.Context, Span, *Observability) {
-	obs := ObsFromCtx(ctx)
-	ctx, span := obs.Trace.Start(ctx, name)
+// StartSpan begins a new trace span using the tracer within the Observability container.
+// It returns a new context containing the span, and the span itself.
+func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.Context, Span) {
+	ctx, span := o.Trace.Start(ctx, name)
 
 	if len(attrs) > 0 {
 		otelAttrs := make([]attribute.KeyValue, 0, len(attrs))
@@ -38,5 +37,5 @@ func StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.
 		span.SetAttributes(otelAttrs...)
 	}
 
-	return ctx, span, obs
+	return ctx, span
 }

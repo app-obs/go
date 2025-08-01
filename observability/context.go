@@ -1,10 +1,8 @@
 package observability
 
-import (
-	"context"
-)
+import "context"
 
-// obsKey is a private type to prevent collisions with other packages
+// obsKey is a private type to prevent collisions with other packages.
 type obsKey struct{}
 
 // CtxWithObs returns a new context with the Observability instance stored.
@@ -13,11 +11,11 @@ func CtxWithObs(ctx context.Context, obs *Observability) context.Context {
 }
 
 // ObsFromCtx retrieves the Observability instance from the context.
-// It returns a new Observability instance with a nil logger if not found.
+// If no instance is found, it returns a default, non-operational instance.
 func ObsFromCtx(ctx context.Context) *Observability {
 	if obs, ok := ctx.Value(obsKey{}).(*Observability); ok {
 		return obs
 	}
-	// Return a new Observability instance with a nil logger to avoid panics
-	return &Observability{}
+	// Return a default instance to prevent panics.
+	return NewObservability(context.Background(), "unknown", "none")
 }

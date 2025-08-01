@@ -2,10 +2,6 @@ package observability
 
 import (
 	"context"
-	"net/http"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 )
 
 // v0.250801.1
@@ -17,31 +13,20 @@ type Shutdowner interface {
 
 // Observability holds the tracing and logging components.
 type Observability struct {
-	Trace *Trace
-	Log   *Log
-	ctx   context.Context
-}
-
-// NewObservabilityFromRequest creates a new Observability instance by extracting the
-// trace context from an incoming HTTP request.
-func NewObservabilityFromRequest(r *http.Request, serviceName string, apmType string) *Observability {
-	var ctx context.Context
-	typedAPMType := normalizeAPMType(apmType)
-	// For OTLP, we need to manually extract the context from the headers.
-	// For Datadog, the tracer does this automatically when starting a span.
-	if typedAPMType == OTLP {
-		ctx = otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	} else {
-		ctx = r.Context()
-	}
-	return NewObservability(ctx, serviceName, apmType)
+	Trace       *Trace
+	Log         *Log
+	ctx         context.Context
+	serviceName string
+	apmType     APMType
 }
 
 // NewObservability creates a new Observability instance.
 func NewObservability(ctx context.Context, serviceName string, apmType string) *Observability {
 	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
-		ctx: ctx,
+		ctx:         ctx,
+		serviceName: serviceName,
+		apmType:     typedAPMType,
 	}
 	baseLogger := InitLogger(typedAPMType)
 	obs.Trace = NewTrace(obs, serviceName, typedAPMType) // Pass obs and apmType to Trace

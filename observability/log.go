@@ -19,6 +19,24 @@ import (
 var (
 	baseLogger *slog.Logger
 	initOnce   sync.Once
+
+	// slogAttrPool reduces allocations by reusing slices for slog attributes.
+	slogAttrPool = sync.Pool{
+		New: func() interface{} {
+			// Pre-allocate a slice with a reasonable capacity.
+			s := make([]slog.Attr, 0, 16)
+			return &s
+		},
+	}
+
+	// otelAttrPool reduces allocations by reusing slices for OpenTelemetry attributes.
+	otelAttrPool = sync.Pool{
+		New: func() interface{} {
+			// Pre-allocate a slice with a reasonable capacity.
+			s := make([]attribute.KeyValue, 0, 16)
+			return &s
+		},
+	}
 )
 
 // InitLogger initializes the global logger and sets it as the default.
@@ -88,6 +106,42 @@ func (l *Log) With(args ...any) *Log {
 	}
 }
 
+// --- Standard Log Compatibility Methods ---
+
+// Printf formats and logs a message at the DEBUG level.
+func (l *Log) Printf(format string, v ...any) {
+	l.log(slog.LevelDebug, fmt.Sprintf(format, v...))
+}
+
+// Println formats and logs a message at the DEBUG level.
+func (l *Log) Println(v ...any) {
+	l.log(slog.LevelDebug, fmt.Sprint(v...))
+}
+
+// Fatalf formats a message, logs it as a fatal error, and exits the application.
+func (l *Log) Fatalf(format string, v ...any) {
+	l.obs.ErrorHandler.Fatal(fmt.Sprintf(format, v...))
+}
+
+// Fatal logs a message as a fatal error and exits the application.
+func (l *Log) Fatal(v ...any) {
+	l.obs.ErrorHandler.Fatal(fmt.Sprint(v...))
+}
+
+// Panicf formats a message, logs it as an error, and panics.
+func (l *Log) Panicf(format string, v ...any) {
+	msg := fmt.Sprintf(format, v...)
+	l.log(slog.LevelError, msg)
+	panic(msg)
+}
+
+// Panic logs a message as an error and panics.
+func (l *Log) Panic(v ...any) {
+	msg := fmt.Sprint(v...)
+	l.log(slog.LevelError, msg)
+	panic(msg)
+}
+
 // --- APMHandler for slog integration ---
 
 type APMHandler struct {
@@ -113,18 +167,26 @@ func (h *APMHandler) Handle(ctx context.Context, r slog.Record) error {
 		r.AddAttrs(slog.String("span.id", spanID))
 	}
 
-	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
-	attrs = append(attrs, h.attrs...)
+	// Use a pooled slice for attributes to reduce allocations.
+	slogAttrsPtr := slogAttrPool.Get().(*[]slog.Attr)
+	defer func() {
+		// Reset the slice length and return it to the pool.
+		*slogAttrsPtr = (*slogAttrsPtr)[:0]
+		slogAttrPool.Put(slogAttrsPtr)
+	}()
+	slogAttrs := *slogAttrsPtr
+
+	slogAttrs = append(slogAttrs, h.attrs...)
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, a)
+		slogAttrs = append(slogAttrs, a)
 		return true
 	})
 
 	switch h.apmType {
 	case OTLP:
-		h.handleOTLP(ctx, r, attrs)
+		h.handleOTLP(ctx, r, slogAttrs)
 	case Datadog:
-		h.handleDatadog(ctx, r, attrs)
+		h.handleDatadog(ctx, r, slogAttrs)
 	case None:
 		// Do nothing
 	}
@@ -153,14 +215,20 @@ func (h *APMHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string
 	return
 }
 
-
 func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []slog.Attr) {
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
 		return
 	}
 
-	otelAttrs := make([]attribute.KeyValue, 0, len(slogAttrs))
+	// Use a pooled slice for OTel attributes.
+	otelAttrsPtr := otelAttrPool.Get().(*[]attribute.KeyValue)
+	defer func() {
+		*otelAttrsPtr = (*otelAttrsPtr)[:0]
+		otelAttrPool.Put(otelAttrsPtr)
+	}()
+	otelAttrs := *otelAttrsPtr
+
 	for _, a := range slogAttrs {
 		otelAttrs = append(otelAttrs, toOtelAttribute(a))
 	}
@@ -247,4 +315,3 @@ func (h *APMHandler) WithGroup(name string) slog.Handler {
 func (h *APMHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.Handler.Enabled(ctx, level)
 }
-

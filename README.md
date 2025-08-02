@@ -35,6 +35,8 @@ curl http://localhost:8080/hello
 
 You will see structured, JSON-formatted logs in your terminal that include `trace.id` and `span.id` fields, demonstrating the core functionality of the library.
 
+For more detailed instructions on how to run the example with different backends (like a generic OTLP collector or the Datadog agent), see the [./example/README.md](./example/README.md).
+
 ## Migration Guides
 
 ### Migrating from standard `log`

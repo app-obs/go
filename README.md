@@ -7,7 +7,7 @@ Its primary goal is to make robust instrumentation easy and consistent across al
 ## Features
 
 - **Unified Tracing API**: Write your instrumentation code once and seamlessly switch between `OTLP` and `Datadog` backends via configuration. Also supports a `none` type to disable tracing completely.
-- **Trace-Aware Structured Logging**: Built on Go's standard `log/slog` package, all log entries are automatically enriched with `trace.id` and `span.id`, providing a seamless link between logs and traces.
+- **Automatic Log Correlation**: Built on Go's standard `log/slog` package, any log created using a request-scoped logger (`obs.Log`) is automatically enriched with `trace.id` and `span.id`, providing a seamless link between logs and traces in your backend. Note that only logs at the `INFO` level or higher are attached to the trace as span events; `DEBUG` logs are excluded to reduce noise.
 - **High-Level HTTP Instrumentation**: A single-line call (`obsFactory.StartSpanFromRequest(r)`) is all that's needed to instrument an incoming HTTP request, automatically handling context propagation, span naming, and standard HTTP attributes.
 - **Standardized Error Handling**: Provides an `ErrorHandler` "toolbox" (`obs.ErrorHandler`) with methods like `HTTP`, `Record`, and `Fatal` to ensure errors are handled consistently across your application.
 - **Performance-Conscious**: Uses `sync.Pool` for logging attributes to significantly reduce memory allocations and GC pressure in high-throughput services.
@@ -15,75 +15,25 @@ Its primary goal is to make robust instrumentation easy and consistent across al
 
 ## Getting Started
 
-Here is a complete example of how to instrument a simple HTTP service.
+A complete, runnable example can be found in the [`./example`](./example) directory.
 
-### In `main.go`
+## Running the Example
 
-```go
-package main
+To run the example server, navigate to the example directory and use `go run`:
 
-import (
-	"context"
-	"net/http"
-	
-	"github.com/app-obs/go/observability"
-)
-
-func main() {
-	// 1. Configure the factory once during startup.
-	factoryConfig := observability.FactoryConfig{
-		ServiceName: "my-service",
-		ServiceApp:  "my-application",
-		ServiceEnv:  "development",
-		ApmType:     "otlp", // or "datadog", "none"
-		ApmURL:      "http://tempo:4318/v1/traces",
-	}
-	obsFactory := observability.NewFactory(factoryConfig)
-	
-	// 2. Get a background logger for startup/shutdown events.
-	bgObs := obsFactory.NewBackgroundObservability(context.Background())
-
-	// 3. Initialize the global tracer provider.
-	tp, err := obsFactory.SetupTracing(context.Background())
-	if err != nil {
-		bgObs.ErrorHandler.Fatal("Failed to initialize TracerProvider", "error", err)
-	}
-	// Ensure traces are flushed on shutdown.
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			bgObs.Log.Error("Error shutting down TracerProvider", "error", err)
-		}
-	}()
-
-	// 4. Instrument your HTTP handlers.
-	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		// This one line handles context propagation, creates the root span,
-		// and provides the observability "toolbox".
-		r, ctx, span, obs := obsFactory.StartSpanFromRequest(r)
-		defer span.End()
-
-		// Your handler logic uses the returned context.
-		handleHello(ctx, w, r)
-	})
-
-	bgObs.Log.Info("Server starting on :8080")
-	http.ListenAndServe(":8080", nil)
-}
-
-func handleHello(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	// 5. Get the observability object from the context.
-	obs := observability.ObsFromCtx(ctx)
-
-	// 6. Use the logger; trace and span IDs are injected automatically.
-	obs.Log.Info("Handling hello request", "user-agent", r.UserAgent())
-
-	// 7. Create nested spans for business logic.
-	ctx, span := obs.StartSpan(ctx, "say-hello", observability.SpanAttributes{"name": "world"})
-	defer span.End()
-
-	w.Write([]byte("Hello, world!"))
-}
+```sh
+# From the root of the 'go' module directory
+cd example
+go run .
 ```
+
+The server will start on port `8080`. You can test it by sending a request from another terminal:
+
+```sh
+curl http://localhost:8080/hello
+```
+
+You will see structured, JSON-formatted logs in your terminal that include `trace.id` and `span.id` fields, demonstrating the core functionality of the library.
 
 ## Migration Guides
 

@@ -41,17 +41,28 @@ var (
 )
 
 // initLogger initializes the global logger and sets it as the default.
-func initLogger(apmType APMType, logSource bool, logLevel, traceLogLevel slog.Level) *slog.Logger {
+// It returns the logger and a shutdowner for graceful termination.
+func initLogger(apmType APMType, logSource bool, logLevel, traceLogLevel slog.Level, async bool) (*slog.Logger, Shutdowner) {
+	var shutdowner Shutdowner = &noOpShutdowner{}
 	initOnce.Do(func() {
 		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			AddSource: logSource,
 			Level:     logLevel,
 		})
-		logger := slog.New(newApmHandler(jsonHandler, apmType, traceLogLevel, logSource))
+
+		var handler slog.Handler = newApmHandler(jsonHandler, apmType, traceLogLevel, logSource)
+
+		if async {
+			asyncHandler := newAsyncHandler(handler)
+			handler = asyncHandler
+			shutdowner = asyncHandler
+		}
+
+		logger := slog.New(handler)
 		slog.SetDefault(logger)
 		baseLogger = logger
 	})
-	return baseLogger
+	return baseLogger, shutdowner
 }
 
 // Log wraps the slog logger.
@@ -348,4 +359,60 @@ func (h *apmHandler) WithGroup(name string) slog.Handler {
 
 func (h *apmHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.Handler.Enabled(ctx, level)
+}
+
+// --- asyncHandler for non-blocking logging ---
+
+const defaultAsyncBufferSize = 10000
+
+type asyncHandler struct {
+	underlying slog.Handler
+	records    chan slog.Record
+	wg         sync.WaitGroup
+}
+
+func newAsyncHandler(underlying slog.Handler) *asyncHandler {
+	h := &asyncHandler{
+		underlying: underlying,
+		records:    make(chan slog.Record, defaultAsyncBufferSize),
+	}
+
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		for record := range h.records {
+			_ = h.underlying.Handle(context.Background(), record)
+		}
+	}()
+
+	return h
+}
+
+func (h *asyncHandler) Handle(ctx context.Context, r slog.Record) error {
+	recordCopy := r.Clone()
+	select {
+	case h.records <- recordCopy:
+		// Log sent successfully.
+	default:
+		// Channel is full, drop the log.
+	}
+	return nil
+}
+
+func (h *asyncHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.underlying.Enabled(ctx, level)
+}
+
+func (h *asyncHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return newAsyncHandler(h.underlying.WithAttrs(attrs))
+}
+
+func (h *asyncHandler) WithGroup(name string) slog.Handler {
+	return newAsyncHandler(h.underlying.WithGroup(name))
+}
+
+func (h *asyncHandler) Shutdown(ctx context.Context) error {
+	close(h.records)
+	h.wg.Wait()
+	return nil
 }

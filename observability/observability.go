@@ -35,7 +35,8 @@ func NewObservability(ctx context.Context, serviceName string, apmType string, l
 		serviceName: serviceName,
 		apmType:     typedAPMType,
 	}
-	baseLogger := initLogger(typedAPMType, logSource, logLevel, traceLogLevel)
+	// The factory is now responsible for initializing the logger.
+	// We assume baseLogger is already initialized and available.
 	obs.Trace = newTrace(obs, serviceName, typedAPMType)
 	obs.Log = newLog(obs, baseLogger)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler
@@ -50,4 +51,12 @@ func (o *Observability) Context() context.Context {
 // SetContext updates the context in the Observability instance.
 func (o *Observability) SetContext(ctx context.Context) {
 	o.ctx = ctx
+}
+
+// noOpShutdowner implements the Shutdowner interface for components that need no shutdown logic.
+type noOpShutdowner struct{}
+
+// Shutdown is a no-op.
+func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
+	return nil
 }

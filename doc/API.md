@@ -4,9 +4,14 @@ This document provides a detailed reference for the public API of the Go Observa
 
 ## Table of Contents
 
-- [Configuration](#configuration)
+- [Initialization](#initialization)
   - [`NewFactory`](#newfactory)
-  - [Configuration Options](#configuration-options)
+  - [`Factory.Setup`](#factorysetup)
+- [Configuration Options](#configuration-options)
+  - [Service Identity](#service-identity)
+  - [APM & Tracing](#apm--tracing)
+  - [Logging](#logging)
+  - [Environment Variable Fallbacks](#environment-variable-fallbacks)
 - [HTTP Request Handling](#http-request-handling)
   - [`Factory.StartSpanFromRequest`](#factorystartspanfromrequest)
 - [Core Observability Object](#core-observability-object)
@@ -14,65 +19,88 @@ This document provides a detailed reference for the public API of the Go Observa
   - [`Observability`](#observability)
 - [Manual Span Management](#manual-span-management)
   - [`Observability.StartSpan`](#observabilitystartspan)
+  - [`Observability.StartSpanWith`](#observabilitystartspanwith)
   - [`SpanAttributes`](#spanattributes)
+- [High-Performance Logging](#high-performance-logging)
+  - [`Log.LogWithAttrs`](#loglogwithattrs)
 - [Context Propagation](#context-propagation)
   - [`Trace.InjectHTTP`](#traceinjecthttp)
+- [Advanced Usage ("Escape Hatches")](#advanced-usage-escape-hatches)
+  - [`Trace.OtelTracer`](#traceoteltracer)
+  - [`Span.OtelSpan`](#spanotelspan)
+  - [`Span.DatadogSpan`](#spandatadogspan)
 - [Attribute Helpers](#attribute-helpers)
   - [`String`, `Int`, `Bool`](#string-int-bool)
 
 ---
 
-## Configuration
-
-Configuration is handled by the `NewFactory` function, which accepts functional options. It is created once at application startup.
+## Initialization
 
 ### `NewFactory`
 
-Creates a new observability factory using functional options. The factory is the main entry point for the library. It initializes with sensible defaults (e.g., `ApmType: "none"`) that can be overridden by the provided `Option` functions.
+Creates a new observability factory using functional options. The factory is the main entry point for the library. It is created once at application startup.
 
 ```go
 func NewFactory(opts ...Option) *Factory
 ```
 
-**Example (Minimal):**
+### `Factory.Setup`
+
+Initializes all configured observability components (logging, tracing, metrics) and returns a single `Shutdowner` instance. This should be called once in your `main` function.
+
 ```go
-// This factory will use defaults: service name will be "unknown-service"
-// and tracing will be disabled ("none").
-obsFactory := observability.NewFactory()
+func (f *Factory) Setup(ctx context.Context) (Shutdowner, error)
 ```
 
-**Example (With Options):**
+**Example:**
 ```go
-obsFactory := observability.NewFactory(
-    observability.WithServiceName("my-service"),
-    observability.WithServiceApp("my-application"),
-    observability.WithApmType("otlp"),
-    observability.WithApmURL("http://otel-collector:4318/v1/traces"),
-)
+obsFactory := observability.NewFactory(...)
+shutdown, err := obsFactory.Setup(context.Background())
+if err != nil {
+    // handle error
+}
+defer shutdown.Shutdown(context.Background())
 ```
 
-### Configuration Options
+---
 
-The following functions provide `Option`s to configure the factory:
+## Configuration Options
 
-- `WithServiceName(name string) Option`: Sets the service name.
-- `WithServiceApp(app string) Option`: Sets the application name.
+### Service Identity
+
+- `WithServiceName(name string) Option`: Sets the service name (e.g., "user-service").
+- `WithServiceApp(app string) Option`: Sets the application or logical group name (e.g., "ecommerce").
 - `WithServiceEnv(env string) Option`: Sets the deployment environment (default: "development").
+
+### APM & Tracing
+
 - `WithApmType(apmType string) Option`: Sets the APM backend ("otlp", "datadog", or "none").
 - `WithApmURL(url string) Option`: Sets the APM collector URL.
+- `WithSampleRate(rate float64) Option`: Sets the trace sampling rate. `1.0` traces every request, `0.1` traces 10%. Default is `1.0`. This is the most effective way to control tracing overhead in production.
+
+### Logging
+
+- `WithLogLevel(level slog.Level) Option`: Sets the minimum level for logs written to stdout. Default is `slog.LevelDebug`.
+- `WithTraceLogLevel(level slog.Level) Option`: Sets the minimum level for logs to be attached to trace spans as events. Default is `slog.LevelInfo`.
+- `WithLogSource(enabled bool) Option`: Toggles adding the source file and line number to logs. Enabled by default. Disabling this in production provides a performance boost.
+- `WithAsynchronousLogging(enabled bool) Option`: Enables non-blocking, buffered logging. This provides a significant performance gain but risks losing logs during a crash. Disabled by default.
 
 ### Environment Variable Fallbacks
 
-As a convenience, the library will also read the following environment variables as a fallback if the corresponding functional options are not provided:
+As a convenience, the library will also read the following environment variables as a fallback if the corresponding functional options are not provided. Functional options always take precedence.
 
-- `OBS_SERVICE_NAME`
-- `OBS_APPLICATION`
-- `OBS_ENVIRONMENT`
-- `OBS_APM_TYPE`
-- `OBS_APM_URL`
+**Note for Kubernetes Users:** A common pattern is to define these environment variables in a Kubernetes `ConfigMap` and then expose them to your application's deployment using `envFrom`.
 
-**Note:** Functional options always take precedence over environment variables.
-
+- `OBS_SERVICE_NAME` (string): Sets the service name used in traces and metrics.
+- `OBS_APPLICATION` (string): Sets the application name, used for grouping services.
+- `OBS_ENVIRONMENT` (string): Sets the deployment environment (e.g., "production").
+- `OBS_APM_TYPE` (string): Sets the APM backend. Valid values: `"otlp"`, `"datadog"`, `"none"`.
+- `OBS_APM_URL` (string): The endpoint URL for the APM collector.
+- `OBS_SAMPLE_RATE` (float): The trace sampling rate. `1.0` traces everything, `0.1` traces 10%.
+- `OBS_LOG_LEVEL` (string): The minimum level for logs written to stdout. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
+- `OBS_TRACE_LOG_LEVEL` (string): The minimum level for logs attached to trace spans. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
+- `OBS_LOG_SOURCE` (bool): Set to `"false"` to disable adding source code location to logs for a performance boost.
+- `OBS_ASYNC_LOGS` (bool): Set to `"true"` to enable high-performance, non-blocking logging.
 
 ---
 
@@ -80,26 +108,14 @@ As a convenience, the library will also read the following environment variables
 
 ### `Factory.StartSpanFromRequest`
 
-This is the primary entry point for instrumenting an incoming HTTP request. It performs several actions:
+This is the primary entry point for instrumenting an incoming HTTP request. It is highly optimized and performs several actions:
 1. Extracts trace context from incoming headers.
 2. Creates a new root span for the request.
-3. Creates the `Observability` container.
-4. Injects the `Observability` object into the request's context.
-5. Returns an updated `*http.Request` and the `context.Context` containing the span and observability object.
+3. Creates and injects the `Observability` object into the request's context.
+4. Returns an updated `*http.Request`, the `context.Context`, the `Span`, and the `Observability` object.
 
 ```go
 func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttributes) (*http.Request, context.Context, Span, *Observability)
-```
-
-**Example (in an `http.HandlerFunc`):**
-```go
-func myHandler(w http.ResponseWriter, r *http.Request) {
-    r, ctx, span, _ := obsFactory.StartSpanFromRequest(r)
-    defer span.End()
-
-    // Use ctx for all subsequent operations
-    // ...
-}
 ```
 
 ---
@@ -108,19 +124,10 @@ func myHandler(w http.ResponseWriter, r *http.Request) {
 
 ### `ObsFromCtx`
 
-Retrieves the `Observability` instance from a `context.Context`. This is the standard way to get access to the logger and tracer within your application logic.
+Retrieves the `Observability` instance from a `context.Context`.
 
 ```go
 func ObsFromCtx(ctx context.Context) *Observability
-```
-
-**Example:**
-```go
-func processRequest(ctx context.Context) {
-    obs := observability.ObsFromCtx(ctx)
-    obs.Log.Info("Processing request")
-    // ...
-}
 ```
 
 ### `Observability`
@@ -135,41 +142,61 @@ type Observability struct {
 }
 ```
 
-- **`Log`**: A structured logger (`slog`) that automatically includes `trace.id` and `span.id`.
-- **`Trace`**: The tracer used for creating new spans and propagating context.
-- **`ErrorHandler`**: A set of helper methods for consistent error handling.
-
 ---
 
 ## Manual Span Management
 
 ### `Observability.StartSpan`
 
-Creates a new child span within an existing trace. This is used to instrument specific operations within a larger request flow.
+Creates a new child span. This is a convenience method that accepts a `map[string]interface{}` for attributes, but has higher overhead than `StartSpanWith`.
 
 ```go
 func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.Context, Span)
 ```
 
+### `Observability.StartSpanWith`
+
+A high-performance method for creating a new child span. It accepts a variadic slice of `attribute.KeyValue`, which avoids the overhead of map processing and type switching. This is the preferred method for performance-critical code.
+
+```go
+func (o *Observability) StartSpanWith(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, Span)
+```
+
 **Example:**
 ```go
-func (s *myService) DoWork(ctx context.Context) {
-    obs := observability.ObsFromCtx(ctx)
-    ctx, span := obs.StartSpan(ctx, "DoWork.Internal", observability.SpanAttributes{
-        "internal.id": 123,
-    })
-    defer span.End()
-
-    // ... do work ...
-}
+ctx, span := obs.StartSpanWith(ctx, "ProcessItem",
+    observability.String("item.id", item.ID),
+    observability.Int("item.size", item.Size),
+)
+defer span.End()
 ```
 
 ### `SpanAttributes`
 
-A convenience type alias for `map[string]interface{}` to make adding attributes to spans more readable.
+A convenience type alias for `map[string]interface{}` used by `StartSpan`.
 
 ```go
 type SpanAttributes map[string]interface{}
+```
+
+---
+
+## High-Performance Logging
+
+### `Log.LogWithAttrs`
+
+A high-performance logging method that bypasses the parsing of variadic key-value pairs. It is ideal for structured, high-frequency logging in performance-sensitive code.
+
+```go
+func (l *Log) LogWithAttrs(level slog.Level, msg string, attrs ...slog.Attr)
+```
+
+**Example:**
+```go
+obs.Log.LogWithAttrs(slog.LevelDebug, "Item processed",
+    slog.String("item.id", item.ID),
+    slog.Int("item.size", item.Size),
+)
 ```
 
 ---
@@ -178,31 +205,47 @@ type SpanAttributes map[string]interface{}
 
 ### `Trace.InjectHTTP`
 
-Injects the current trace context into the headers of an outgoing HTTP request. This is essential for propagating traces across service boundaries.
+Injects the current trace context into the headers of an outgoing HTTP request.
 
 ```go
 func (t *Trace) InjectHTTP(req *http.Request)
 ```
 
-**Example (in an HTTP client):**
+---
+
+## Advanced Usage ("Escape Hatches")
+
+These methods provide direct access to the underlying APM-specific objects when you need functionality not exposed by the unified API.
+
+### `Trace.OtelTracer`
+
+Returns the underlying OpenTelemetry `trace.Tracer`.
+
 ```go
-func callAnotherService(ctx context.Context) {
-    obs := observability.ObsFromCtx(ctx)
+func (t *Trace) OtelTracer() trace.Tracer
+```
 
-    req, _ := http.NewRequestWithContext(ctx, "GET", "http://another-service/data", nil)
+### `Span.OtelSpan`
 
-    // Inject trace headers into the outgoing request
-    obs.Trace.InjectHTTP(req)
+Returns the underlying OpenTelemetry `trace.Span`. Returns `nil` if the backend is not OTLP.
 
-    http.DefaultClient.Do(req)
-}
+```go
+func (s *Span) OtelSpan() trace.Span
+```
+
+### `Span.DatadogSpan`
+
+Returns the underlying Datadog `tracer.Span`. Returns `nil` if the backend is not Datadog.
+
+```go
+func (s *Span) DatadogSpan() tracer.Span
 ```
 
 ---
 
 ## Attribute Helpers
 
-These functions are simple wrappers around the OpenTelemetry `attribute` package to create `KeyValue` pairs. They are provided for convenience to avoid an extra import.
+These functions are simple wrappers to create `attribute.KeyValue` pairs for use with `StartSpanWith`.
 
 ### `String`, `Int`, `Bool`
 
@@ -210,12 +253,4 @@ These functions are simple wrappers around the OpenTelemetry `attribute` package
 func String(key, value string) attribute.KeyValue
 func Int(key string, value int) attribute.KeyValue
 func Bool(key string, value bool) attribute.KeyValue
-```
-
-**Example:**
-```go
-span.SetAttributes(
-    observability.String("user.id", "xyz"),
-    observability.Bool("is.admin", false),
-)
 ```

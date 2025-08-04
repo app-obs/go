@@ -1,0 +1,37 @@
+# This is an example of how to configure the observability library's
+# environment variables using a Kubernetes ConfigMap.
+#
+# To apply this: kubectl apply -f configmap.yaml
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-config
+  # It's good practice to put your app and its config in the same namespace
+  namespace: my-app-namespace
+data:
+  # --- Service Identity ---
+  # These values identify your service within your observability platform.
+  OBS_APPLICATION: "ecommerce-platform"
+  OBS_ENVIRONMENT: "production"
+
+  # --- APM & Tracing ---
+  # Controls the tracing backend and sampling rate.
+  OBS_APM_TYPE: "otlp"
+  OBS_APM_URL: "http://tempo.observability.svc.cluster.local:4318/v1/traces"
+  
+  # This is the most important knob for controlling performance.
+  # A value of "0.1" means only 10% of requests will be traced.
+  OBS_SAMPLE_RATE: "0.1"
+
+  # --- Logging Performance & Verbosity ---
+  # In production, you typically want to log only "info" or "warn" to stdout
+  # to reduce log volume and improve performance.
+  OBS_LOG_LEVEL: "info"
+  
+  # You might want to attach more verbose logs to the traces that you *do* collect.
+  OBS_TRACE_LOG_LEVEL: "debug"
+  
+  # For maximum performance, disable these in production.
+  OBS_LOG_SOURCE: "false"
+  OBS_ASYNC_LOGS: "true"

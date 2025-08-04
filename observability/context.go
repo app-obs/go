@@ -1,6 +1,9 @@
 package observability
 
-import "context"
+import (
+	"context"
+	"log/slog"
+)
 
 // obsKey is a private type to prevent collisions with other packages.
 type obsKey struct{}
@@ -17,5 +20,5 @@ func ObsFromCtx(ctx context.Context) *Observability {
 		return obs
 	}
 	// Return a default instance to prevent panics.
-	return NewObservability(context.Background(), "unknown", "none", true)
+	return NewObservability(context.Background(), "unknown", "none", true, slog.LevelDebug, slog.LevelInfo)
 }

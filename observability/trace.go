@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -228,14 +229,6 @@ func setupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmU
 	}
 }
 
-// noOpShutdowner implements the Shutdowner interface for the None APM type.
-type noOpShutdowner struct{}
-
-// Shutdown is a no-op.
-func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
-	return nil
-}
-
 // setupDatadog configures and initializes the Datadog Tracer.
 func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
 	tracer.Start(
@@ -243,10 +236,10 @@ func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmU
 		tracer.WithEnv(serviceEnv),
 		tracer.WithServiceVersion(serviceApp),
 		tracer.WithAgentAddr(apmURL),
-		tracer.WithSampleRate(sampleRate),
+		tracer.WithAnalyticsRate(sampleRate),
 	)
 
-	obs := NewObservability(ctx, serviceName, string(Datadog), true)
+	obs := NewObservability(ctx, serviceName, string(Datadog), true, slog.LevelDebug, slog.LevelInfo)
 	obs.Log.Info("Datadog Tracer initialized successfully",
 		"APMURL", apmURL,
 		"APMType", Datadog,
@@ -289,7 +282,7 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 		propagation.Baggage{},
 	))
 
-	obs := NewObservability(ctx, serviceName, string(OTLP), true)
+	obs := NewObservability(ctx, serviceName, string(OTLP), true, slog.LevelDebug, slog.LevelInfo)
 	obs.Log.Info("OpenTelemetry TracerProvider initialized successfully",
 		"APMURL", apmURL,
 		"APMType", OTLP,

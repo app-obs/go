@@ -1,3 +1,10 @@
+// Package observability provides a unified, opinionated framework for instrumenting
+// Go services. It offers a consistent API for structured logging and distributed
+// tracing, abstracting over concrete implementations like OpenTelemetry and Datadog.
+//
+// The primary entry point for consumers is the `Factory`, which is used to
+// configure and create `Observability` instances. From there, users can access
+// logging, tracing, and error handling capabilities.
 package observability
 
 import (
@@ -29,10 +36,10 @@ func NewObservability(ctx context.Context, serviceName string, apmType string) *
 		serviceName: serviceName,
 		apmType:     typedAPMType,
 	}
-	baseLogger := InitLogger(typedAPMType)
-	obs.Trace = NewTrace(obs, serviceName, typedAPMType)
-	obs.Log = NewLog(obs, baseLogger)
-	obs.ErrorHandler = NewErrorHandler(obs) // Initialize the error handler
+	baseLogger := initLogger(typedAPMType)
+	obs.Trace = newTrace(obs, serviceName, typedAPMType)
+	obs.Log = newLog(obs, baseLogger)
+	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler
 	return obs
 }
 

@@ -5,8 +5,8 @@ import "context"
 // obsKey is a private type to prevent collisions with other packages.
 type obsKey struct{}
 
-// CtxWithObs returns a new context with the Observability instance stored.
-func CtxWithObs(ctx context.Context, obs *Observability) context.Context {
+// ctxWithObs returns a new context with the Observability instance stored.
+func ctxWithObs(ctx context.Context, obs *Observability) context.Context {
 	return context.WithValue(ctx, obsKey{}, obs)
 }
 

@@ -36,8 +36,8 @@ func (s *noOpSpan) RecordError(error, ...trace.EventOption)  {}
 func (s *noOpSpan) SetStatus(codes.Code, string)             {}
 func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
 
-// Tracer is an interface for a tracer.
-type Tracer interface {
+// traceImpl is an interface for a tracer.
+type traceImpl interface {
 	Start(ctx context.Context, spanName string) (context.Context, Span)
 }
 
@@ -141,8 +141,8 @@ type Trace struct {
 	apmType APMType
 }
 
-// NewTrace creates a new Trace instance.
-func NewTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
+// newTrace creates a new Trace instance.
+func newTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 	return &Trace{
 		unifiedTracer: &unifiedTracer{
 			obs:    obs,
@@ -167,8 +167,8 @@ func (t *Trace) InjectHTTP(req *http.Request) {
 	}
 }
 
-// SetupTracing initializes and configures the global TracerProvider based on APM type.
-func SetupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, apmType string) (Shutdowner, error) {
+// setupTracing initializes and configures the global TracerProvider based on APM type.
+func setupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, apmType string) (Shutdowner, error) {
 	switch normalizeAPMType(apmType) {
 	case OTLP:
 		return setupOTLP(ctx, serviceName, serviceApp, serviceEnv, apmURL)

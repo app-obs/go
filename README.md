@@ -4,6 +4,8 @@ An opinionated, unified observability library for Go services. This library prov
 
 Its primary goal is to make robust instrumentation easy and consistent across all microservices in a project.
 
+For a detailed guide to the public API, see the [API Reference](./doc/API.md).
+
 ## Features
 
 - **Unified Tracing API**: Write your instrumentation code once and seamlessly switch between `OTLP` and `Datadog` backends via configuration. Also supports a `none` type to disable tracing completely.

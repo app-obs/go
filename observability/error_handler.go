@@ -12,8 +12,8 @@ type ErrorHandler struct {
 	obs *Observability
 }
 
-// NewErrorHandler creates a new error handler associated with an Observability instance.
-func NewErrorHandler(obs *Observability) *ErrorHandler {
+// newErrorHandler creates a new error handler associated with an Observability instance.
+func newErrorHandler(obs *Observability) *ErrorHandler {
 	return &ErrorHandler{obs: obs}
 }
 

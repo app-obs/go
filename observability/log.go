@@ -39,14 +39,14 @@ var (
 	}
 )
 
-// InitLogger initializes the global logger and sets it as the default.
-func InitLogger(apmType APMType) *slog.Logger {
+// initLogger initializes the global logger and sets it as the default.
+func initLogger(apmType APMType) *slog.Logger {
 	initOnce.Do(func() {
 		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			AddSource: true,
 			Level:     slog.LevelDebug,
 		})
-		logger := slog.New(NewAPMHandler(jsonHandler, apmType))
+		logger := slog.New(newApmHandler(jsonHandler, apmType))
 		slog.SetDefault(logger)
 		baseLogger = logger
 	})
@@ -59,8 +59,8 @@ type Log struct {
 	logger *slog.Logger
 }
 
-// NewLog creates a new Log instance.
-func NewLog(obs *Observability, baseLogger *slog.Logger) *Log {
+// newLog creates a new Log instance.
+func newLog(obs *Observability, baseLogger *slog.Logger) *Log {
 	return &Log{
 		obs:    obs,
 		logger: baseLogger,
@@ -142,22 +142,22 @@ func (l *Log) Panic(v ...any) {
 	panic(msg)
 }
 
-// --- APMHandler for slog integration ---
+// --- apmHandler for slog integration ---
 
-type APMHandler struct {
+type apmHandler struct {
 	slog.Handler
 	attrs   []slog.Attr
 	apmType APMType
 }
 
-func NewAPMHandler(baseHandler slog.Handler, apmType APMType) *APMHandler {
-	return &APMHandler{
+func newApmHandler(baseHandler slog.Handler, apmType APMType) *apmHandler {
+	return &apmHandler{
 		Handler: baseHandler,
 		apmType: apmType,
 	}
 }
 
-func (h *APMHandler) Handle(ctx context.Context, r slog.Record) error {
+func (h *apmHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Add trace and span IDs to the record's attributes
 	traceID, spanID := h.getTraceSpanID(ctx)
 	if traceID != "" {
@@ -194,7 +194,7 @@ func (h *APMHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.Handler.Handle(ctx, r)
 }
 
-func (h *APMHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string) {
+func (h *apmHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string) {
 	if h.apmType == None {
 		return "", ""
 	}
@@ -215,7 +215,7 @@ func (h *APMHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string
 	return
 }
 
-func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []slog.Attr) {
+func (h *apmHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []slog.Attr) {
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
 		return
@@ -242,7 +242,7 @@ func (h *APMHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 	}
 }
 
-func (h *APMHandler) handleDatadog(ctx context.Context, r slog.Record, attrs []slog.Attr) {
+func (h *apmHandler) handleDatadog(ctx context.Context, r slog.Record, attrs []slog.Attr) {
 	if ddSpan, ok := tracer.SpanFromContext(ctx); ok {
 		for _, a := range attrs {
 			ddSpan.SetTag(a.Key, a.Value.String())
@@ -292,26 +292,26 @@ func toOtelAttribute(a slog.Attr) attribute.KeyValue {
 	}
 }
 
-func (h *APMHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *apmHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	newAttrs := make([]slog.Attr, len(h.attrs)+len(attrs))
 	copy(newAttrs, h.attrs)
 	copy(newAttrs[len(h.attrs):], attrs)
 
-	return &APMHandler{
+	return &apmHandler{
 		Handler: h.Handler.WithAttrs(attrs),
 		attrs:   newAttrs,
 		apmType: h.apmType,
 	}
 }
 
-func (h *APMHandler) WithGroup(name string) slog.Handler {
-	return &APMHandler{
+func (h *apmHandler) WithGroup(name string) slog.Handler {
+	return &apmHandler{
 		Handler: h.Handler.WithGroup(name),
 		attrs:   h.attrs,
 		apmType: h.apmType,
 	}
 }
 
-func (h *APMHandler) Enabled(ctx context.Context, level slog.Level) bool {
+func (h *apmHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.Handler.Enabled(ctx, level)
 }

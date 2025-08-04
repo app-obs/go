@@ -30,7 +30,7 @@ If you have any OpenTelemetry collector running that is accessible from your mac
 Replace `<your-collector-host>` with the actual hostname or IP of your collector.
 
 ```sh
-APM_TYPE="otlp" APM_URL="http://<your-collector-host>:4318" go run .
+OBS_APM_TYPE="otlp" OBS_APM_URL="http://<your-collector-host>:4318" go run .
 ```
 
 ---
@@ -44,7 +44,7 @@ This is the recommended setup for a rich local development experience.
 
 **Command:**
 ```sh
-APM_TYPE="otlp" APM_URL="http://localhost:4318" go run .
+OBS_APM_TYPE="otlp" OBS_APM_URL="http://localhost:4318" go run .
 ```
 
 After running the command, send a request to the example service:
@@ -68,7 +68,7 @@ If you are a Datadog user and have the Datadog Agent running locally.
 The library will connect to the default agent address (`localhost:8126`).
 
 ```sh
-APM_TYPE="datadog" go run .
+OBS_APM_TYPE="datadog" go run .
 ```
 
 You can then view the trace in your Datadog APM dashboard.

@@ -8,15 +8,17 @@ import (
 )
 
 func main() {
-	// 1. Configure the factory once during startup.
-	factoryConfig := observability.FactoryConfig{
-		ServiceName: "my-service",
-		ServiceApp:  "my-application",
-		ServiceEnv:  "development",
-		ApmType:     "none", // Use "none" for this example to avoid needing a backend.
-		ApmURL:      "",     // Not needed for "none" type.
-	}
-	obsFactory := observability.NewFactory(factoryConfig)
+	// 1. Configure the factory once during startup using functional options.
+	// The library provides sensible defaults (like APMType="none"), so you only
+	// need to set what you want to override.
+	obsFactory := observability.NewFactory(
+		observability.WithServiceName("my-service"),
+		observability.WithServiceApp("my-application"),
+		// For this example, we explicitly keep the default "none" APM type.
+		// To send traces, you might use:
+		// observability.WithApmType("otlp"),
+		// observability.WithApmURL("http://localhost:4318/v1/traces"),
+	)
 
 	// 2. Get a background logger for startup/shutdown events.
 	bgObs := obsFactory.NewBackgroundObservability(context.Background())

@@ -12,9 +12,11 @@ func main() {
 	// The library provides sensible defaults and environment variable fallbacks.
 	obsFactory := observability.NewFactory(
 		observability.WithServiceName("my-service"),
-		// To send traces to a local collector, you might use:
-		// observability.WithApmType("otlp"),
-		// observability.WithApmURL("http://localhost:4318/v1/traces"),
+		// Explicitly enable OTLP for APM and metrics.
+		// In a real app, these would likely come from environment variables.
+		observability.WithApmType("otlp"),
+		observability.WithMetricsType("otlp"),
+		observability.WithApmURL("http://localhost:4318"),
 	)
 
 	// 2. Initialize all observability components and defer the shutdown.

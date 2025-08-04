@@ -107,7 +107,7 @@ The returned `Shutdowner` object has two methods:
 
 ### Metrics
 
-- `WithRuntimeMetrics(enabled bool) Option`: Enables the automatic collection of Go runtime metrics (CPU, memory, GC, goroutines). Disabled by default.
+- `WithMetricsType(metricsType string) Option`: Sets the metrics backend ("otlp" or "none"). This controls the collection of automatic Go runtime metrics (CPU, memory, GC, goroutines).
 
 ### Environment Variable Fallbacks
 
@@ -119,13 +119,13 @@ As a convenience, the library will also read the following environment variables
 - `OBS_APPLICATION` (string): Sets the application name, used for grouping services.
 - `OBS_ENVIRONMENT` (string): Sets the deployment environment (e.g., "production").
 - `OBS_APM_TYPE` (string): Sets the APM backend. Valid values: `"otlp"`, `"datadog"`, `"none"`.
+- `OBS_METRICS_TYPE` (string): Sets the metrics backend. Valid values: `"otlp"`, `"none"`.
 - `OBS_APM_URL` (string): The endpoint URL for the APM collector.
 - `OBS_SAMPLE_RATE` (float): The trace sampling rate. `1.0` traces everything, `0.1` traces 10%.
 - `OBS_LOG_LEVEL` (string): The minimum level for logs written to stdout. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
 - `OBS_TRACE_LOG_LEVEL` (string): The minimum level for logs attached to trace spans. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
 - `OBS_LOG_SOURCE` (bool): Set to `"false"` to disable adding source code location to logs for a performance boost.
 - `OBS_ASYNC_LOGS` (bool): Set to `"true"` to enable high-performance, non-blocking logging.
-- `OBS_RUNTIME_METRICS` (bool): Set to `"true"` to enable automatic runtime metrics collection.
 
 ---
 

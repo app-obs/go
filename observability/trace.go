@@ -303,3 +303,9 @@ func newOTLPExporter(ctx context.Context, apmURL string) (sdktrace.SpanExporter,
 	}
 	return exporter, nil
 }
+
+func setupMetrics(ctx context.Context) (Shutdowner, error) {
+	// For now, we'll just use the global meter provider.
+	// In the future, we might want to configure a specific exporter here.
+	return &noOpShutdowner{}, nil
+}

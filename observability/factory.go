@@ -17,18 +17,17 @@ import (
 // factoryConfig holds the static configuration for the observability system.
 // It is kept private to encourage the use of functional options.
 type factoryConfig struct {
-	ServiceName        string
-	ServiceApp         string
-	ServiceEnv         string
-	ApmType            string
-	ApmURL             string
-	LogSource          bool
-	SampleRate         float64
-	LogLevel           slog.Level
-	TraceLogLevel      slog.Level
-	AsynchronousLogs   bool
-	RuntimeMetrics     bool
-	HotReloadFile      string
+	ServiceName      string
+	ServiceApp       string
+	ServiceEnv       string
+	ApmType          string
+	ApmURL           string
+	LogSource        bool
+	SampleRate       float64
+	LogLevel         slog.Level
+	TraceLogLevel    slog.Level
+	AsynchronousLogs bool
+	RuntimeMetrics   bool
 }
 
 // Option is a function that configures a `factoryConfig`.
@@ -102,6 +101,13 @@ func WithTraceLogLevel(level slog.Level) Option {
 func WithAsynchronousLogging(enabled bool) Option {
 	return func(c *factoryConfig) {
 		c.AsynchronousLogs = enabled
+	}
+}
+
+// WithRuntimeMetrics enables the collection of automatic runtime metrics.
+func WithRuntimeMetrics(enabled bool) Option {
+	return func(c *factoryConfig) {
+		c.RuntimeMetrics = enabled
 	}
 }
 
@@ -180,6 +186,11 @@ func NewFactory(opts ...Option) *Factory {
 			config.AsynchronousLogs = b
 		}
 	}
+	if val := os.Getenv("OBS_RUNTIME_METRICS"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			config.RuntimeMetrics = b
+		}
+	}
 
 	return &Factory{config: config}
 }
@@ -198,6 +209,14 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 	}
 	shutdowners = append(shutdowners, traceShutdowner)
 
+	if f.config.RuntimeMetrics {
+		metricsShutdowner, err := f.setupMetrics(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to setup metrics: %w", err)
+		}
+		shutdowners = append(shutdowners, metricsShutdowner)
+	}
+
 	return &compositeShutdowner{shutdowners: shutdowners}, nil
 }
 
@@ -208,6 +227,10 @@ func (f *Factory) setupLogging() Shutdowner {
 
 func (f *Factory) setupTracing(ctx context.Context) (Shutdowner, error) {
 	return setupTracing(ctx, f.config.ServiceName, f.config.ServiceApp, f.config.ServiceEnv, f.config.ApmURL, f.config.ApmType, f.config.SampleRate)
+}
+
+func (f *Factory) setupMetrics(ctx context.Context) (Shutdowner, error) {
+	return setupMetrics(ctx)
 }
 
 // NewBackgroundObservability creates an Observability instance with a background context,

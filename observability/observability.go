@@ -21,6 +21,7 @@ type Shutdowner interface {
 type Observability struct {
 	Trace        *Trace
 	Log          *Log
+	Metrics      *Metrics
 	ErrorHandler *ErrorHandler
 	ctx          context.Context
 	serviceName  string
@@ -39,6 +40,7 @@ func NewObservability(ctx context.Context, serviceName string, apmType string, l
 	// We assume baseLogger is already initialized and available.
 	obs.Trace = newTrace(obs, serviceName, typedAPMType)
 	obs.Log = newLog(obs, baseLogger)
+	obs.Metrics = newMetrics(obs)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler
 	return obs
 }

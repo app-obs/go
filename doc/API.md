@@ -11,6 +11,7 @@ This document provides a detailed reference for the public API of the Go Observa
   - [Service Identity](#service-identity)
   - [APM & Tracing](#apm--tracing)
   - [Logging](#logging)
+  - [Metrics](#metrics)
   - [Environment Variable Fallbacks](#environment-variable-fallbacks)
 - [HTTP Request Handling](#http-request-handling)
   - [`Factory.StartSpanFromRequest`](#factorystartspanfromrequest)
@@ -23,6 +24,8 @@ This document provides a detailed reference for the public API of the Go Observa
   - [`SpanAttributes`](#spanattributes)
 - [High-Performance Logging](#high-performance-logging)
   - [`Log.LogWithAttrs`](#loglogwithattrs)
+- [Custom Metrics](#custom-metrics)
+  - [`Metrics.Counter`](#metricscounter)
 - [Context Propagation](#context-propagation)
   - [`Trace.InjectHTTP`](#traceinjecthttp)
 - [Advanced Usage ("Escape Hatches")](#advanced-usage-escape-hatches)
@@ -85,6 +88,10 @@ defer shutdown.Shutdown(context.Background())
 - `WithLogSource(enabled bool) Option`: Toggles adding the source file and line number to logs. Enabled by default. Disabling this in production provides a performance boost.
 - `WithAsynchronousLogging(enabled bool) Option`: Enables non-blocking, buffered logging. This provides a significant performance gain but risks losing logs during a crash. Disabled by default.
 
+### Metrics
+
+- `WithRuntimeMetrics(enabled bool) Option`: Enables the automatic collection of Go runtime metrics (CPU, memory, GC, goroutines). Disabled by default.
+
 ### Environment Variable Fallbacks
 
 As a convenience, the library will also read the following environment variables as a fallback if the corresponding functional options are not provided. Functional options always take precedence.
@@ -101,6 +108,7 @@ As a convenience, the library will also read the following environment variables
 - `OBS_TRACE_LOG_LEVEL` (string): The minimum level for logs attached to trace spans. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
 - `OBS_LOG_SOURCE` (bool): Set to `"false"` to disable adding source code location to logs for a performance boost.
 - `OBS_ASYNC_LOGS` (bool): Set to `"true"` to enable high-performance, non-blocking logging.
+- `OBS_RUNTIME_METRICS` (bool): Set to `"true"` to enable automatic runtime metrics collection.
 
 ---
 
@@ -138,6 +146,7 @@ The `Observability` struct is the main container for all instrumentation tools.
 type Observability struct {
     Trace        *Trace
     Log          *Log
+    Metrics      *Metrics
     ErrorHandler *ErrorHandler
 }
 ```
@@ -197,6 +206,30 @@ obs.Log.LogWithAttrs(slog.LevelDebug, "Item processed",
     slog.String("item.id", item.ID),
     slog.Int("item.size", item.Size),
 )
+```
+
+---
+
+## Custom Metrics
+
+### `Metrics.Counter`
+
+Creates or retrieves a `float64` counter metric. Counters are monotonic, meaning their value can only increase. They are useful for tracking things like the number of requests, items processed, or errors.
+
+```go
+func (m *Metrics) Counter(name string, opts ...metric.Float64CounterOption) (metric.Float64Counter, error)
+```
+
+**Example:**
+```go
+// In initialization code:
+itemsProcessed, err := obs.Metrics.Counter("items_processed_total")
+if err != nil {
+    // handle error
+}
+
+// In application code:
+itemsProcessed.Add(ctx, 1.0, attribute.String("item_type", "widget"))
 ```
 
 ---

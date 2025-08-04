@@ -5,15 +5,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
+	"github.com/shirou/gopsutil/v3/process"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
@@ -258,54 +263,68 @@ func (d *datadogShutdowner) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// setupOTLP configures and initializes the OpenTelemetry TracerProvider.
+// setupOTLP configures and initializes the OpenTelemetry TracerProvider and MeterProvider.
 func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
-	exporter, err := newOTLPExporter(ctx, apmURL)
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceNameKey.String(serviceName),
+		attribute.String("application", serviceApp),
+		attribute.String("environment", serviceEnv),
+	)
+
+	// Set up the trace exporter
+	traceExporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(apmURL))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(serviceName),
-			attribute.String("application", serviceApp),
-			attribute.String("environment", serviceEnv),
-		)),
+		sdktrace.WithBatcher(traceExporter),
+		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(sampleRate)),
 	)
 
+	// Set up the metric exporter
+	metricExporter, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(apmURL))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OTLP metric exporter: %w", err)
+	}
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+		sdkmetric.WithResource(res),
+	)
+
 	otel.SetTracerProvider(tp)
+	otel.SetMeterProvider(mp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
 
 	obs := NewObservability(ctx, serviceName, string(OTLP), true, slog.LevelDebug, slog.LevelInfo)
-	obs.Log.Info("OpenTelemetry TracerProvider initialized successfully",
+	obs.Log.Info("OpenTelemetry TracerProvider and MeterProvider initialized successfully",
 		"APMURL", apmURL,
 		"APMType", OTLP,
 		"SampleRate", sampleRate,
 	)
 
-	return tp, nil
-}
-
-// newOTLPExporter creates a new OTLP exporter.
-func newOTLPExporter(ctx context.Context, apmURL string) (sdktrace.SpanExporter, error) {
-	client := otlptracehttp.NewClient(
-		otlptracehttp.WithEndpointURL(apmURL),
-	)
-	exporter, err := otlptrace.New(ctx, client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
-	}
-	return exporter, nil
+	// Return a composite shutdowner for both providers
+	return &compositeShutdowner{
+		shutdowners: []Shutdowner{tp, mp},
+	}, nil
 }
 
 func setupMetrics(ctx context.Context) (Shutdowner, error) {
-	// For now, we'll just use the global meter provider.
-	// In the future, we might want to configure a specific exporter here.
-	return &noOpShutdowner{}, nil
+	// The meter provider is now set up in setupOTLP.
+	// This function's role is to start the runtime metrics collection.
+	p, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current process: %w", err)
+	}
+	meter := newMeter(otel.GetMeterProvider(), p)
+	if err := meter.start(); err != nil {
+		return nil, fmt.Errorf("failed to start runtime metrics: %w", err)
+	}
+	return meter, nil
 }

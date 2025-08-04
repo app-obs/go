@@ -209,6 +209,16 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 	}
 	shutdowners = append(shutdowners, traceShutdowner)
 
+	// Metrics are only supported for the "otlp" APM type.
+	if normalizeAPMType(f.config.ApmType) != OTLP {
+		if f.config.RuntimeMetrics {
+			// Use a background logger to inform the user.
+			bgObs := f.NewBackgroundObservability(context.Background())
+			bgObs.Log.Info("Disabling runtime metrics; this feature is only supported when OBS_APM_TYPE is 'otlp'", "current_apm_type", f.config.ApmType)
+			f.config.RuntimeMetrics = false
+		}
+	}
+
 	if f.config.RuntimeMetrics {
 		metricsShutdowner, err := f.setupMetrics(ctx)
 		if err != nil {

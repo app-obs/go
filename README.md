@@ -147,7 +147,7 @@ The library is designed for high performance in production environments. Configu
 - `OBS_TRACE_LOG_LEVEL` (string): **Effect:** Sets the minimum level for logs to be attached to trace spans as events. This allows you to keep stdout quiet while still capturing important events in your traces.
 - `OBS_ASYNC_LOGS` (bool): **Effect:** If set to `"true"`, enables non-blocking, buffered logging. This provides a major performance boost by decoupling application logic from I/O, but risks losing a small number of logs if the application crashes.
 - `OBS_LOG_SOURCE` (bool): **Effect:** If set to `"false"`, disables the automatic addition of source code file and line numbers to logs, providing a performance boost.
-- `OBS_RUNTIME_METRICS` (bool): **Effect:** If set to `"true"`, enables automatic runtime metrics collection.
+- `OBS_RUNTIME_METRICS` (bool): **Effect:** If set to `"true"`, enables automatic runtime metrics collection. **Note:** This feature is only supported when `OBS_APM_TYPE` is set to `"otlp"`. It will be automatically disabled for other types.
 
 ---
 

@@ -60,9 +60,29 @@ func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
 func (s *noOpSpan) OtelSpan() trace.Span                     { return nil }
 func (s *noOpSpan) DatadogSpan() tracer.Span                 { var sp tracer.Span; return sp }
 
-// traceImpl is an interface for a tracer.
-type traceImpl interface {
-	Start(ctx context.Context, spanName string) (context.Context, Span)
+// Start creates a new span based on the APM type.
+func (t *Trace) Start(ctx context.Context, spanName string) (context.Context, Span) {
+	if t.apmType == None {
+		return ctx, &noOpSpan{}
+	}
+
+	parentCtx := t.obs.Context()
+	span := unifiedSpanPool.Get().(*unifiedSpan)
+	span.obs = t.obs
+	span.parentCtx = parentCtx
+
+	var newCtx context.Context
+	if t.apmType == Datadog {
+		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
+		span.span = ddSpan
+		newCtx = newDdCtx
+	} else {
+		var otelSpan trace.Span
+		newCtx, otelSpan = t.tracer.Start(ctx, spanName)
+		span.span = otelSpan
+	}
+
+	return newCtx, span
 }
 
 // unifiedSpan is a concrete implementation of the Span interface.
@@ -146,57 +166,23 @@ func (s *unifiedSpan) DatadogSpan() tracer.Span {
 	return ddSpan
 }
 
-// unifiedTracer is a unified tracer that can create either OTel or Datadog spans.
-type unifiedTracer struct {
-	obs    *Observability
-	tracer trace.Tracer // OTel tracer
-}
-
-// Start creates a new span based on the APM type.
-func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Context, Span) {
-	apmType := t.obs.Trace.apmType
-
-	if apmType == None {
-		return ctx, &noOpSpan{}
-	}
-
-	parentCtx := t.obs.Context()
-	span := unifiedSpanPool.Get().(*unifiedSpan)
-	span.obs = t.obs
-	span.parentCtx = parentCtx
-
-	var newCtx context.Context
-	if apmType == Datadog {
-		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
-		span.span = ddSpan
-		newCtx = newDdCtx
-	} else {
-		var otelSpan trace.Span
-		newCtx, otelSpan = t.tracer.Start(ctx, spanName)
-		span.span = otelSpan
-	}
-
-	return newCtx, span
-}
-
 // Trace holds the active tracer and APM type.
 type Trace struct {
-	*unifiedTracer
+	obs     *Observability
+	tracer  trace.Tracer // OTel tracer
 	apmType APMType
 }
 
 // OtelTracer provides an "escape hatch" to the underlying OpenTelemetry tracer.
 func (t *Trace) OtelTracer() trace.Tracer {
-	return t.unifiedTracer.tracer
+	return t.tracer
 }
 
 // newTrace creates a new Trace instance.
 func newTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 	return &Trace{
-		unifiedTracer: &unifiedTracer{
-			obs:    obs,
-			tracer: otel.Tracer(serviceName),
-		},
+		obs:     obs,
+		tracer:  otel.Tracer(serviceName),
 		apmType: apmType,
 	}
 }
@@ -204,11 +190,12 @@ func newTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 // InjectHTTP injects the current trace context into the headers of an outgoing HTTP request.
 // It automatically handles the correct propagation format for the configured APM type.
 func (t *Trace) InjectHTTP(req *http.Request) {
+	ctx := t.obs.Context() // Always use the context from the parent observability object.
 	switch t.apmType {
 	case OTLP:
-		otel.GetTextMapPropagator().Inject(t.obs.Context(), propagation.HeaderCarrier(req.Header))
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	case Datadog:
-		if span, ok := tracer.SpanFromContext(t.obs.Context()); ok {
+		if span, ok := tracer.SpanFromContext(ctx); ok {
 			tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
 		}
 	case None:

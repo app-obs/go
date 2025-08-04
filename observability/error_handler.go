@@ -24,12 +24,11 @@ func (h *ErrorHandler) HTTP(w http.ResponseWriter, msg string, statusCode int) {
 	http.Error(w, msg, statusCode)
 }
 
-// Record logs an error and records it to the current trace span, marking the span as failed.
+// Record logs an error. The underlying logging handler will automatically
+// record the error on the current trace span and set its status to Error.
 // This is for recoverable errors that are returned up the call stack.
-func (h *ErrorHandler) Record(span Span, err error, msg string) {
-	span.RecordError(err)
-	span.SetStatus(codes.Error, msg)
-	h.obs.Log.Logc(slog.LevelError, 3, msg, "error", err)
+func (h *ErrorHandler) Record(err error, msg string) {
+	h.obs.Log.Error(msg, "error", err)
 }
 
 // Fatal logs a fatal error and exits the application.

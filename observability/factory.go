@@ -271,10 +271,10 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	// Extract the trace context from the incoming headers.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 
-	// Create the observability container.
+	// Create the observability container using the extracted context.
 	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
 
-	// Start the span using the new method. This returns a context with the span.
+	// Start the span. This returns a new context and a new observability object.
 	ctx, obs, span := obs.StartSpanWith(r.URL.Path,
 		attribute.String("http.method", r.Method),
 		attribute.String("http.url", r.URL.String()),

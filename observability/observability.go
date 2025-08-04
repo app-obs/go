@@ -64,10 +64,13 @@ func (o *Observability) clone(ctx context.Context) *Observability {
 	newObs := *o
 	// Set the new context.
 	newObs.ctx = ctx
-	// Create a new Log instance that points to the new Observability object.
-	// This ensures that logs created from this new object are correctly
-	// associated with its context (and therefore its span).
+
+	// Re-initialize the components that depend on the observability object itself
+	// to ensure they point to the new, cloned object, not the original.
+	newObs.Trace = newTrace(&newObs, newObs.serviceName, newObs.apmType)
 	newObs.Log = newLog(&newObs, baseLogger)
+	newObs.Metrics = newMetrics(&newObs)
+	newObs.ErrorHandler = newErrorHandler(&newObs)
 	return &newObs
 }
 

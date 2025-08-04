@@ -4,8 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-
-	"go.opentelemetry.io/otel/codes"
 )
 
 // ErrorHandler provides convenience methods for handling errors in a standardized way.

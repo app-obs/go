@@ -137,3 +137,8 @@ func (m *meter) Shutdown(ctx context.Context) error {
 	// The meter provider's shutdown will handle the callback removal.
 	return nil
 }
+
+// ShutdownOrLog implements the Shutdowner interface for the meter.
+func (m *meter) ShutdownOrLog(msg string) {
+	// The meter shutdown is a no-op, so no action is needed.
+}

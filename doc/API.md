@@ -49,21 +49,38 @@ func NewFactory(opts ...Option) *Factory
 
 ### `Factory.Setup`
 
-Initializes all configured observability components (logging, tracing, metrics) and returns a single `Shutdowner` instance. This should be called once in your `main` function.
+Initializes all configured observability components (logging, tracing, metrics) and returns a single `Shutdowner` instance. This should be called once in your `main` function. You should use this function if you need to handle initialization errors with custom logic.
 
 ```go
 func (f *Factory) Setup(ctx context.Context) (Shutdowner, error)
 ```
 
+### `Factory.SetupOrExit` (Recommended)
+
+A convenience wrapper around `Setup`. It initializes all components and returns a `Shutdowner`. If any error occurs during setup, it logs a fatal message and exits the application. This is the recommended method for most applications as it simplifies `main` function logic.
+
+```go
+func (f *Factory) SetupOrExit(fatalMsg string) Shutdowner
+```
+
 **Example:**
 ```go
+// In main.go
 obsFactory := observability.NewFactory(...)
-shutdown, err := obsFactory.Setup(context.Background())
-if err != nil {
-    // handle error
-}
-defer shutdown.Shutdown(context.Background())
+
+// 1. Initialize all observability components, exiting on failure.
+shutdowner := obsFactory.SetupOrExit("Failed to setup observability")
+
+// 2. Defer the shutdown call.
+defer shutdowner.ShutdownOrLog("Error during observability shutdown")
+
+// ... rest of your application
 ```
+
+The returned `Shutdowner` object has two methods:
+
+- `Shutdown(ctx context.Context) error`: Attempts to gracefully shut down all components, respecting a context for deadlines. Returns an error if any component fails to shut down.
+- `ShutdownOrLog(msg string)`: The recommended convenience method. It calls `Shutdown` with a default internal timeout (10s) and automatically logs any error that occurs. This is perfect for a `defer` statement.
 
 ---
 

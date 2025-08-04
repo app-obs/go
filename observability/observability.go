@@ -14,7 +14,14 @@ import (
 
 // Shutdowner defines a contract for components that can be gracefully shut down.
 type Shutdowner interface {
+	// Shutdown attempts to gracefully shut down the component, respecting the
+	// provided context for deadlines or cancellation.
 	Shutdown(ctx context.Context) error
+
+	// ShutdownOrLog is a convenience method that calls Shutdown with a default
+	// timeout. If an error occurs, it logs the provided message and the error
+	// to a fallback logger. This is ideal for simple defer calls in main.
+	ShutdownOrLog(msg string)
 }
 
 // Observability holds the tracing and logging components.
@@ -61,4 +68,9 @@ type noOpShutdowner struct{}
 // Shutdown is a no-op.
 func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
 	return nil
+}
+
+// ShutdownOrLog is a no-op.
+func (n *noOpShutdowner) ShutdownOrLog(msg string) {
+	// Do nothing.
 }

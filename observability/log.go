@@ -169,6 +169,38 @@ func (l *Log) Panic(v ...any) {
 	panic(msg)
 }
 
+// LogFatal provides a fallback logger for critical errors during startup
+// when the full observability stack may not be available. It logs a
+// message and attributes as a JSON object to standard output and then
+// terminates the application with a non-zero exit code.
+//
+// This function is safe to call even before the observability factory
+// has been initialized.
+func LogFatal(msg string, args ...any) {
+	// Create a minimal, reliable logger on the fly.
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true, // Include source file and line number.
+		Level:     slog.LevelError,
+	})
+	logger := slog.New(handler)
+
+	// Log the error and exit.
+	logger.Error(msg, args...)
+	os.Exit(1)
+}
+
+// LogShutdownError provides a fallback logger for non-fatal errors that
+// occur during the shutdown process. It logs a message and attributes
+// as a JSON object to standard output.
+func LogShutdownError(msg string, err error) {
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: false, // Source is less important for shutdown errors.
+		Level:     slog.LevelError,
+	})
+	logger := slog.New(handler)
+	logger.Error(msg, "error", err)
+}
+
 // --- apmHandler for slog integration ---
 
 type apmHandler struct {
@@ -415,4 +447,13 @@ func (h *asyncHandler) Shutdown(ctx context.Context) error {
 	close(h.records)
 	h.wg.Wait()
 	return nil
+}
+
+// ShutdownOrLog implements the Shutdowner interface for the asyncHandler.
+func (h *asyncHandler) ShutdownOrLog(msg string) {
+	// The regular shutdown for the async handler doesn't have a context
+	// and is not expected to fail, so we can call it directly.
+	if err := h.Shutdown(context.Background()); err != nil {
+		LogShutdownError(msg, err)
+	}
 }

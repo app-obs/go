@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -205,6 +206,8 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 
 	traceShutdowner, err := f.setupTracing(ctx)
 	if err != nil {
+		// Attempt to shutdown any components that were already initialized.
+		_ = (&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
 		return nil, fmt.Errorf("failed to setup tracing: %w", err)
 	}
 	shutdowners = append(shutdowners, traceShutdowner)
@@ -222,12 +225,25 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 	if f.config.RuntimeMetrics {
 		metricsShutdowner, err := f.setupMetrics(ctx)
 		if err != nil {
+			// Attempt to shutdown any components that were already initialized.
+			_ = (&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
 			return nil, fmt.Errorf("failed to setup metrics: %w", err)
 		}
 		shutdowners = append(shutdowners, metricsShutdowner)
 	}
 
 	return &compositeShutdowner{shutdowners: shutdowners}, nil
+}
+
+// SetupOrExit is a convenience wrapper around Setup that logs a fatal
+// message and exits the application if an error occurs. This is useful
+// for simplifying main application entry points.
+func (f *Factory) SetupOrExit(fatalMsg string) Shutdowner {
+	shutdowner, err := f.Setup(context.Background())
+	if err != nil {
+		LogFatal(fatalMsg, "error", err)
+	}
+	return shutdowner
 }
 
 func (f *Factory) setupLogging() Shutdowner {
@@ -307,4 +323,15 @@ func (cs *compositeShutdowner) Shutdown(ctx context.Context) error {
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// ShutdownOrLog implements the Shutdowner interface.
+func (cs *compositeShutdowner) ShutdownOrLog(msg string) {
+	// Create a context with a timeout for the shutdown process.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := cs.Shutdown(ctx); err != nil {
+		LogShutdownError(msg, err)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"github.com/shirou/gopsutil/v3/process"
@@ -261,6 +262,13 @@ func (d *datadogShutdowner) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// ShutdownOrLog implements the Shutdowner interface for the datadogShutdowner.
+func (d *datadogShutdowner) ShutdownOrLog(msg string) {
+	// The Datadog Stop() function is synchronous and doesn't return an error,
+	// so we can call it directly without needing the fallback logger.
+	d.Shutdown(context.Background())
+}
+
 // setupOTLP configures and initializes the OpenTelemetry TracerProvider and MeterProvider.
 func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
 	res := resource.NewWithAttributes(
@@ -309,8 +317,36 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 
 	// Return a composite shutdowner for both providers
 	return &compositeShutdowner{
-		shutdowners: []Shutdowner{tp, mp},
+		shutdowners: []Shutdowner{
+			&otlpShutdowner{provider: tp, name: "TracerProvider"},
+			&otlpShutdowner{provider: mp, name: "MeterProvider"},
+		},
 	}, nil
+}
+
+// otlpShutdowner is a wrapper for OpenTelemetry providers to implement the full Shutdowner interface.
+type otlpShutdowner struct {
+	provider interface {
+		Shutdown(context.Context) error
+	}
+	name string
+}
+
+// Shutdown calls the underlying provider's Shutdown method.
+func (s *otlpShutdowner) Shutdown(ctx context.Context) error {
+	if err := s.provider.Shutdown(ctx); err != nil {
+		return fmt.Errorf("failed to shutdown %s: %w", s.name, err)
+	}
+	return nil
+}
+
+// ShutdownOrLog implements the Shutdowner interface.
+func (s *otlpShutdowner) ShutdownOrLog(msg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		LogShutdownError(msg, err)
+	}
 }
 
 func setupMetrics(ctx context.Context) (Shutdowner, error) {

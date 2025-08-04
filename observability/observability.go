@@ -27,14 +27,14 @@ type Observability struct {
 }
 
 // NewObservability creates a new Observability instance.
-func NewObservability(ctx context.Context, serviceName string, apmType string) *Observability {
+func NewObservability(ctx context.Context, serviceName string, apmType string, logSource bool) *Observability {
 	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
 		ctx:         ctx,
 		serviceName: serviceName,
 		apmType:     typedAPMType,
 	}
-	baseLogger := initLogger(typedAPMType)
+	baseLogger := initLogger(typedAPMType, logSource)
 	obs.Trace = newTrace(obs, serviceName, typedAPMType)
 	obs.Log = newLog(obs, baseLogger)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler

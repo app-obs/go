@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,10 +41,10 @@ var (
 )
 
 // initLogger initializes the global logger and sets it as the default.
-func initLogger(apmType APMType) *slog.Logger {
+func initLogger(apmType APMType, logSource bool) *slog.Logger {
 	initOnce.Do(func() {
 		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			AddSource: true,
+			AddSource: logSource,
 			Level:     slog.LevelDebug,
 		})
 		logger := slog.New(newApmHandler(jsonHandler, apmType))
@@ -210,8 +211,8 @@ func (h *apmHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string
 		}
 	} else if h.apmType == Datadog {
 		if ddSpan, ok := tracer.SpanFromContext(ctx); ok {
-			traceID = fmt.Sprintf("%d", ddSpan.Context().TraceID())
-			spanID = fmt.Sprintf("%d", ddSpan.Context().SpanID())
+			traceID = ddSpan.Context().TraceID()
+			spanID = strconv.FormatUint(ddSpan.Context().SpanID(), 10)
 		}
 	}
 	return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strconv"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -17,6 +18,7 @@ type factoryConfig struct {
 	ServiceEnv  string
 	ApmType     string
 	ApmURL      string
+	LogSource   bool
 }
 
 // Option is a function that configures a `factoryConfig`.
@@ -58,6 +60,13 @@ func WithApmURL(url string) Option {
 	}
 }
 
+// WithLogSource enables or disables the automatic addition of source file and line number to logs.
+func WithLogSource(enabled bool) Option {
+	return func(c *factoryConfig) {
+		c.LogSource = enabled
+	}
+}
+
 // Factory is responsible for creating Observability instances.
 type Factory struct {
 	config factoryConfig
@@ -73,6 +82,7 @@ func NewFactory(opts ...Option) *Factory {
 		ServiceEnv:  "development",
 		ApmType:     "none",
 		ApmURL:      "", // No default URL
+		LogSource:   true, // Default to enabled for development convenience.
 	}
 
 	// Apply user-provided options
@@ -80,8 +90,6 @@ func NewFactory(opts ...Option) *Factory {
 		opt(&config)
 	}
 
-	// As a convenience, also read from standard environment variables if they exist,
-	// but only if the user hasn't already set the value via an option.
 	// As a convenience, also read from standard environment variables if they exist,
 	// but only if the user hasn't already set the value via an option.
 	if config.ServiceName == "unknown-service" {
@@ -109,6 +117,12 @@ func NewFactory(opts ...Option) *Factory {
 			config.ApmURL = val
 		}
 	}
+	// Allow overriding LogSource via environment variable.
+	if val := os.Getenv("OBS_LOG_SOURCE"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			config.LogSource = b
+		}
+	}
 
 	return &Factory{config: config}
 }
@@ -116,7 +130,7 @@ func NewFactory(opts ...Option) *Factory {
 // NewBackgroundObservability creates an Observability instance with a background context,
 // ideal for logging startup, shutdown, or other non-request-bound events.
 func (f *Factory) NewBackgroundObservability(ctx context.Context) *Observability {
-	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType)
+	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource)
 }
 
 // SetupTracing initializes the global tracer provider based on the factory's configuration.
@@ -131,7 +145,7 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 
 	// Create the observability container.
-	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType)
+	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource)
 
 	// Automatically create default attributes from the request.
 	defaultAttrs := SpanAttributes{

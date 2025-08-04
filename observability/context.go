@@ -17,5 +17,5 @@ func ObsFromCtx(ctx context.Context) *Observability {
 		return obs
 	}
 	// Return a default instance to prevent panics.
-	return NewObservability(context.Background(), "unknown", "none")
+	return NewObservability(context.Background(), "unknown", "none", true)
 }

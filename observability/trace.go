@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"go.opentelemetry.io/otel"
@@ -16,6 +17,15 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
+)
+
+var (
+	// unifiedSpanPool reduces allocations by reusing unifiedSpan objects.
+	unifiedSpanPool = sync.Pool{
+		New: func() interface{} {
+			return new(unifiedSpan)
+		},
+	}
 )
 
 // Span is a unified interface for a trace span, wrapping both OTel and Datadog spans.
@@ -57,6 +67,11 @@ func (s *unifiedSpan) End() {
 	case tracer.Span:
 		span.Finish()
 	}
+	// Reset the struct and put it back in the pool.
+	s.span = nil
+	s.obs = nil
+	s.parentCtx = nil
+	unifiedSpanPool.Put(s)
 }
 
 // AddEvent adds an event to the span.
@@ -116,10 +131,9 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 	}
 
 	parentCtx := t.obs.Context()
-	span := &unifiedSpan{
-		obs:       t.obs,
-		parentCtx: parentCtx,
-	}
+	span := unifiedSpanPool.Get().(*unifiedSpan)
+	span.obs = t.obs
+	span.parentCtx = parentCtx
 
 	var newCtx context.Context
 	if apmType == Datadog {
@@ -199,7 +213,7 @@ func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmU
 		tracer.WithAgentAddr(apmURL),
 	)
 
-	obs := NewObservability(ctx, serviceName, string(Datadog))
+	obs := NewObservability(ctx, serviceName, string(Datadog), true)
 	obs.Log.Info("Datadog Tracer initialized successfully",
 		"APMURL", apmURL,
 		"APMType", Datadog,
@@ -241,7 +255,7 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 		propagation.Baggage{},
 	))
 
-	obs := NewObservability(ctx, serviceName, string(OTLP))
+	obs := NewObservability(ctx, serviceName, string(OTLP), true)
 	obs.Log.Info("OpenTelemetry TracerProvider initialized successfully",
 		"APMURL", apmURL,
 		"APMType", OTLP,

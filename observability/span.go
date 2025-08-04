@@ -39,3 +39,13 @@ func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAt
 
 	return ctx, span
 }
+
+// StartSpanWith provides a more performant way to create a span with attributes.
+// It accepts a pre-built slice of attribute.KeyValue to avoid the overhead of map processing and type switching.
+func (o *Observability) StartSpanWith(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, Span) {
+	ctx, span := o.Trace.Start(ctx, name)
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
+	return ctx, span
+}

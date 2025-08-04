@@ -35,6 +35,14 @@ type Span interface {
 	RecordError(error, ...trace.EventOption)
 	SetStatus(codes.Code, string)
 	SetAttributes(...attribute.KeyValue)
+
+	// OtelSpan provides an "escape hatch" to the underlying OpenTelemetry span.
+	// It returns nil if the APM type is not OTLP.
+	OtelSpan() trace.Span
+
+	// DatadogSpan provides an "escape hatch" to the underlying Datadog span.
+	// It returns nil if the APM type is not Datadog.
+	DatadogSpan() tracer.Span
 }
 
 // noOpSpan is a no-op implementation of the Span interface.
@@ -45,6 +53,8 @@ func (s *noOpSpan) AddEvent(string, ...trace.EventOption)    {}
 func (s *noOpSpan) RecordError(error, ...trace.EventOption)  {}
 func (s *noOpSpan) SetStatus(codes.Code, string)             {}
 func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
+func (s *noOpSpan) OtelSpan() trace.Span                     { return nil }
+func (s *noOpSpan) DatadogSpan() tracer.Span                 { var sp tracer.Span; return sp }
 
 // traceImpl is an interface for a tracer.
 type traceImpl interface {
@@ -111,9 +121,26 @@ func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
 		span.SetAttributes(attrs...)
 	case tracer.Span:
 		for _, attr := range attrs {
-			span.SetTag(string(attr.Key), attr.Value.AsString())
+			span.SetTag(string(attr.Key), attr.Value.AsInterface())
 		}
 	}
+}
+
+// OtelSpan returns the underlying OpenTelemetry span, or nil.
+func (s *unifiedSpan) OtelSpan() trace.Span {
+	if span, ok := s.span.(trace.Span); ok {
+		return span
+	}
+	return nil
+}
+
+// DatadogSpan returns the underlying Datadog span, or nil.
+func (s *unifiedSpan) DatadogSpan() tracer.Span {
+	if span, ok := s.span.(tracer.Span); ok {
+		return span
+	}
+	var ddSpan tracer.Span
+	return ddSpan
 }
 
 // unifiedTracer is a unified tracer that can create either OTel or Datadog spans.
@@ -154,6 +181,11 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 type Trace struct {
 	*unifiedTracer
 	apmType APMType
+}
+
+// OtelTracer provides an "escape hatch" to the underlying OpenTelemetry tracer.
+func (t *Trace) OtelTracer() trace.Tracer {
+	return t.unifiedTracer.tracer
 }
 
 // newTrace creates a new Trace instance.

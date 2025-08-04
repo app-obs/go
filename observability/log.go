@@ -102,6 +102,21 @@ func (l *Log) Error(msg string, args ...any) {
 	l.Logc(slog.LevelError, 3, msg, args...)
 }
 
+// LogWithAttrs provides a more performant logging method for high-frequency calls.
+// It accepts a pre-built slice of slog.Attr to avoid the overhead of parsing variadic arguments.
+// The call depth is fixed to 3, which assumes this method is not wrapped.
+func (l *Log) LogWithAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
+	ctx := l.getCtx()
+	if !l.logger.Enabled(ctx, level) {
+		return
+	}
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:]) // skip [Callers, LogWithAttrs]
+	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	r.AddAttrs(attrs...)
+	_ = l.logger.Handler().Handle(ctx, r)
+}
+
 func (l *Log) With(args ...any) *Log {
 	return &Log{
 		obs:    l.obs,

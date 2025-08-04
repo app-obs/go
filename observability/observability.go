@@ -57,9 +57,18 @@ func (o *Observability) Context() context.Context {
 	return o.ctx
 }
 
-// SetContext updates the context in the Observability instance.
-func (o *Observability) SetContext(ctx context.Context) {
-	o.ctx = ctx
+// clone creates a new Observability instance with a new context, ensuring
+// that the original instance remains immutable.
+func (o *Observability) clone(ctx context.Context) *Observability {
+	// Create a shallow copy of the struct.
+	newObs := *o
+	// Set the new context.
+	newObs.ctx = ctx
+	// Create a new Log instance that points to the new Observability object.
+	// This ensures that logs created from this new object are correctly
+	// associated with its context (and therefore its span).
+	newObs.Log = newLog(&newObs, baseLogger)
+	return &newObs
 }
 
 // noOpShutdowner implements the Shutdowner interface for components that need no shutdown logic.

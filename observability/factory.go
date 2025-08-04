@@ -275,7 +275,7 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
 
 	// Start the span using the new method. This returns a context with the span.
-	ctx, span := obs.StartSpanWith(r.URL.Path,
+	ctx, obs, span := obs.StartSpanWith(r.URL.Path,
 		attribute.String("http.method", r.Method),
 		attribute.String("http.url", r.URL.String()),
 		attribute.String("http.target", r.URL.RequestURI()),

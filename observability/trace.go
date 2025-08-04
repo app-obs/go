@@ -74,7 +74,6 @@ type unifiedSpan struct {
 
 // End ends the span based on the APM type.
 func (s *unifiedSpan) End() {
-	s.obs.SetContext(s.parentCtx)
 	switch span := s.span.(type) {
 	case trace.Span:
 		span.End()
@@ -177,7 +176,6 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 		span.span = otelSpan
 	}
 
-	t.obs.SetContext(newCtx)
 	return newCtx, span
 }
 

@@ -42,7 +42,8 @@ func main() {
 }
 
 func handleHello(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	// 5. Create a new span and get the observability container in one call.
+	// 5. Create a new span. This returns a new context, a new observability
+	// object, and the span. The new 'obs' is tied to the new span's context.
 	ctx, obs, span := observability.StartSpanFromCtx(ctx, "say-hello",
 		observability.SpanAttributes{"name": "world"},
 	)

@@ -157,7 +157,7 @@ func ObsFromCtx(ctx context.Context) *Observability
 
 ### `Observability`
 
-The `Observability` struct is the main container for all instrumentation tools.
+The `Observability` struct is the main container for all instrumentation tools. It is designed to be **immutable**. When you create a new span, you receive a *new* `Observability` object that is tied to that span's context. This makes the library safe for concurrent use.
 
 ```go
 type Observability struct {
@@ -174,7 +174,7 @@ type Observability struct {
 
 ### `StartSpanFromCtx` (Recommended)
 
-A convenience function that gets the observability container from the context and starts a new span. It returns the new context, the observability container, and the created span. This is the recommended way to create spans.
+A convenience function that gets the observability container from the context and starts a new span. It returns the new context, a **new** observability container associated with that context, and the created span. This is the recommended way to create spans.
 
 ```go
 func StartSpanFromCtx(ctx context.Context, name string, attrs SpanAttributes) (context.Context, *Observability, Span)
@@ -190,13 +190,14 @@ func StartSpanFromCtxWith(ctx context.Context, name string, attrs ...attribute.K
 
 **Example:**
 ```go
+// The returned 'obs' is a new object tied to the new span.
 ctx, obs, span := observability.StartSpanFromCtxWith(ctx, "ProcessItem",
     observability.String("item.id", item.ID),
     observability.Int("item.size", item.Size),
 )
 defer span.End()
 
-// You can now use the obs object for logging, etc.
+// Any logs from this 'obs' object are now correctly associated with the new span.
 obs.Log.Info("Processing item")
 ```
 
@@ -210,10 +211,10 @@ type SpanAttributes map[string]interface{}
 
 ### `Observability.StartSpan` (Advanced)
 
-Creates a new child span. This method is available on the `Observability` object but it is generally recommended to use the `StartSpanFromCtx` helper functions instead. It uses the context already stored within the `Observability` object.
+Creates a new child span. This method is available on the `Observability` object but it is generally recommended to use the `StartSpanFromCtx` helper functions instead. It returns a new context, a **new** `Observability` object, and the created span.
 
 ```go
-func (o *Observability) StartSpan(name string, attrs SpanAttributes) (context.Context, Span)
+func (o *Observability) StartSpan(name string, attrs SpanAttributes) (context.Context, *Observability, Span)
 ```
 
 ### `Observability.StartSpanWith` (Advanced, High-Performance)
@@ -221,7 +222,7 @@ func (o *Observability) StartSpan(name string, attrs SpanAttributes) (context.Co
 A high-performance method for creating a new child span from the `Observability` object.
 
 ```go
-func (o *Observability) StartSpanWith(name string, attrs ...attribute.KeyValue) (context.Context, Span)
+func (o *Observability) StartSpanWith(name string, attrs ...attribute.KeyValue) (context.Context, *Observability, Span)
 ```
 
 ---

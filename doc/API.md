@@ -118,14 +118,14 @@ func ObsFromCtx(ctx context.Context) *Observability
 ```go
 func processRequest(ctx context.Context) {
     obs := observability.ObsFromCtx(ctx)
-    obs.Log.Info("Processing request")
+    obs.Log.Info(ctx, "Processing request")
     // ...
 }
 ```
 
 ### `Observability`
 
-The `Observability` struct is the main container for all instrumentation tools.
+The `Observability` struct is the main container for all instrumentation tools. It is a stateless toolbox; all of its methods require a `context.Context` to be passed as the first argument.
 
 ```go
 type Observability struct {
@@ -135,9 +135,39 @@ type Observability struct {
 }
 ```
 
-- **`Log`**: A structured logger (`slog`) that automatically includes `trace.id` and `span.id`.
+- **`Log`**: A structured logger (`slog`) that automatically includes `trace.id` and `span.id`. All logging methods (`Info`, `Error`, etc.) require a `context`.
 - **`Trace`**: The tracer used for creating new spans and propagating context.
-- **`ErrorHandler`**: A set of helper methods for consistent error handling.
+- **`ErrorHandler`**: A set of helper methods for consistent error handling. All methods require a `context`.
+
+### `Log.WithContext` (Convenience Helper)
+
+To make migration from standard `slog` easier and reduce verbosity, you can create a short-lived contextual logger.
+
+```go
+func (l *Log) WithContext(ctx context.Context) *ContextualLog
+```
+
+The returned `ContextualLog` object has an API that matches `slog` exactly (e.g., `log.Info("message")`), as the context is baked in.
+
+**Example:**
+```go
+func processRequest(ctx context.Context) {
+    obs := observability.ObsFromCtx(ctx)
+    
+    // Create a logger with the context baked in
+    log := obs.Log.WithContext(ctx)
+
+    // Now the API matches slog! No ctx needed.
+    log.Info("Starting work...")
+
+    childCtx, span := obs.StartSpan(ctx, "child-operation")
+    defer span.End()
+
+    // For the new context, create a new contextual logger
+    childLog := obs.Log.WithContext(childCtx)
+    childLog.Warn("Something happened in the child span")
+}
+```
 
 ---
 
@@ -145,7 +175,7 @@ type Observability struct {
 
 ### `Observability.StartSpan`
 
-Creates a new child span within an existing trace. This is used to instrument specific operations within a larger request flow.
+Creates a new child span within an existing trace. This is used to instrument specific operations within a larger request flow. It returns a new context containing the child span.
 
 ```go
 func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.Context, Span)
@@ -155,12 +185,15 @@ func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAt
 ```go
 func (s *myService) DoWork(ctx context.Context) {
     obs := observability.ObsFromCtx(ctx)
-    ctx, span := obs.StartSpan(ctx, "DoWork.Internal", observability.SpanAttributes{
+
+    // Start a new span, creating a new context
+    childCtx, span := obs.StartSpan(ctx, "DoWork.Internal", observability.SpanAttributes{
         "internal.id": 123,
     })
     defer span.End()
 
-    // ... do work ...
+    // Use the new childCtx for all subsequent operations
+    obs.Log.Info(childCtx, "Doing internal work")
 }
 ```
 
@@ -181,7 +214,7 @@ type SpanAttributes map[string]interface{}
 Injects the current trace context into the headers of an outgoing HTTP request. This is essential for propagating traces across service boundaries.
 
 ```go
-func (t *Trace) InjectHTTP(req *http.Request)
+func (t *Trace) InjectHTTP(ctx context.Context, req *http.Request)
 ```
 
 **Example (in an HTTP client):**
@@ -191,8 +224,8 @@ func callAnotherService(ctx context.Context) {
 
     req, _ := http.NewRequestWithContext(ctx, "GET", "http://another-service/data", nil)
 
-    // Inject trace headers into the outgoing request
-    obs.Trace.InjectHTTP(req)
+    // Inject trace headers from the context into the outgoing request
+    obs.Trace.InjectHTTP(ctx, req)
 
     http.DefaultClient.Do(req)
 }

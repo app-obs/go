@@ -2,11 +2,15 @@ package observability
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // factoryConfig holds the static configuration for the observability system.
@@ -15,8 +19,12 @@ type factoryConfig struct {
 	ServiceName string
 	ServiceApp  string
 	ServiceEnv  string
-	ApmType     string
-	ApmURL      string
+	ApmType      string
+	ApmURL       string
+	LogLevel     slog.Level
+	SpanLogLevel slog.Level
+	Sampler      sdktrace.Sampler
+	SampleRatio  float64
 }
 
 // Option is a function that configures a `factoryConfig`.
@@ -58,9 +66,40 @@ func WithApmURL(url string) Option {
 	}
 }
 
+// WithLogLevel sets the minimum log level to be written to stdout.
+func WithLogLevel(level slog.Level) Option {
+	return func(c *factoryConfig) {
+		c.LogLevel = level
+	}
+}
+
+// WithSpanLogLevel sets the minimum log level to be attached to a trace span as an event.
+func WithSpanLogLevel(level slog.Level) Option {
+	return func(c *factoryConfig) {
+		c.SpanLogLevel = level
+	}
+}
+
+// WithSampler allows providing a custom OpenTelemetry Sampler.
+// This option is more advanced and overrides WithSampleRatio.
+func WithSampler(sampler sdktrace.Sampler) Option {
+	return func(c *factoryConfig) {
+		c.Sampler = sampler
+	}
+}
+
+// WithSampleRatio sets a ratio-based sampler for traces.
+// For example, a ratio of 0.1 will sample 10% of traces.
+func WithSampleRatio(ratio float64) Option {
+	return func(c *factoryConfig) {
+		c.SampleRatio = ratio
+	}
+}
+
 // Factory is responsible for creating Observability instances.
 type Factory struct {
 	config factoryConfig
+	logger *slog.Logger
 }
 
 // NewFactory creates a new observability factory using functional options.
@@ -68,11 +107,14 @@ type Factory struct {
 func NewFactory(opts ...Option) *Factory {
 	// Establish default configuration
 	config := factoryConfig{
-		ServiceName: "unknown-service",
-		ServiceApp:  "unknown-app",
-		ServiceEnv:  "development",
-		ApmType:     "none",
-		ApmURL:      "", // No default URL
+		ServiceName:  "unknown-service",
+		ServiceApp:   "unknown-app",
+		ServiceEnv:   "development",
+		ApmType:      "none",
+		ApmURL:       "", // No default URL
+		LogLevel:     slog.LevelInfo,
+		SpanLogLevel: slog.LevelInfo,
+		SampleRatio:  1.0, // Default to sampling all traces
 	}
 
 	// Apply user-provided options
@@ -80,8 +122,6 @@ func NewFactory(opts ...Option) *Factory {
 		opt(&config)
 	}
 
-	// As a convenience, also read from standard environment variables if they exist,
-	// but only if the user hasn't already set the value via an option.
 	// As a convenience, also read from standard environment variables if they exist,
 	// but only if the user hasn't already set the value via an option.
 	if config.ServiceName == "unknown-service" {
@@ -109,19 +149,57 @@ func NewFactory(opts ...Option) *Factory {
 			config.ApmURL = val
 		}
 	}
+	// Handle log level environment variables
+	if val := os.Getenv("OBS_LOG_LEVEL"); val != "" {
+		config.LogLevel = parseLogLevel(val, slog.LevelInfo)
+	}
+	if val := os.Getenv("OBS_SPAN_LOG_LEVEL"); val != "" {
+		config.SpanLogLevel = parseLogLevel(val, slog.LevelInfo)
+	}
+	if val := os.Getenv("OBS_SAMPLE_RATIO"); val != "" {
+		if ratio, err := strconv.ParseFloat(val, 64); err == nil {
+			config.SampleRatio = ratio
+		}
+	}
 
-	return &Factory{config: config}
+	// Set up the sampler
+	if config.Sampler == nil {
+		config.Sampler = sdktrace.ParentBased(sdktrace.TraceIDRatioBased(config.SampleRatio))
+	}
+
+	logger := newLogger(normalizeAPMType(config.ApmType), config.LogLevel, config.SpanLogLevel)
+
+	return &Factory{
+		config: config,
+		logger: logger,
+	}
 }
 
-// NewBackgroundObservability creates an Observability instance with a background context,
-// ideal for logging startup, shutdown, or other non-request-bound events.
-func (f *Factory) NewBackgroundObservability(ctx context.Context) *Observability {
-	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType)
+// parseLogLevel converts a string to a slog.Level, with a default.
+func parseLogLevel(levelStr string, defaultLevel slog.Level) slog.Level {
+	switch strings.ToUpper(levelStr) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	case "WARN":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return defaultLevel
+	}
+}
+
+// NewBackgroundObservability creates an Observability instance.
+// It is intended for use in background processes or startup/shutdown hooks.
+func (f *Factory) NewBackgroundObservability() *Observability {
+	return NewObservability(f.config.ServiceName, f.config.ApmType, f.logger)
 }
 
 // SetupTracing initializes the global tracer provider based on the factory's configuration.
 func (f *Factory) SetupTracing(ctx context.Context) (Shutdowner, error) {
-	return setupTracing(ctx, f.config.ServiceName, f.config.ServiceApp, f.config.ServiceEnv, f.config.ApmURL, f.config.ApmType)
+	return setupTracing(ctx, f.config, f.logger)
 }
 
 // StartSpanFromRequest is the primary entry point for instrumenting an incoming HTTP request.
@@ -130,8 +208,8 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	// Extract the trace context from the incoming headers.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 
-	// Create the observability container.
-	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType)
+	// Create the stateless observability container.
+	obs := NewObservability(f.config.ServiceName, f.config.ApmType, f.logger)
 
 	// Automatically create default attributes from the request.
 	defaultAttrs := SpanAttributes{
@@ -149,10 +227,10 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 		}
 	}
 
-	// Start the span using the new method. This returns a context with the span.
-	ctx, span := obs.StartSpan(obs.Context(), r.URL.Path, defaultAttrs)
+	// Start the span. This returns a new context containing the span.
+	ctx, span := obs.StartSpan(ctx, r.URL.Path, defaultAttrs)
 
-	// Put the obs object into the new context that contains the span.
+	// Put the obs object into the new context so it can be retrieved by app code.
 	ctx = ctxWithObs(ctx, obs)
 
 	// Update the request with this final, fully-populated context.

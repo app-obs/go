@@ -9,6 +9,7 @@ package observability
 
 import (
 	"context"
+	"log/slog"
 )
 
 // v0.250801.1
@@ -18,37 +19,25 @@ type Shutdowner interface {
 	Shutdown(ctx context.Context) error
 }
 
-// Observability holds the tracing and logging components.
+// Observability holds the tracing and logging components. It is a stateless
+// toolbox; all of its methods require a context to be passed explicitly.
 type Observability struct {
 	Trace        *Trace
 	Log          *Log
 	ErrorHandler *ErrorHandler
-	ctx          context.Context
 	serviceName  string
 	apmType      APMType
 }
 
 // NewObservability creates a new Observability instance.
-func NewObservability(ctx context.Context, serviceName string, apmType string) *Observability {
+func NewObservability(serviceName string, apmType string, logger *slog.Logger) *Observability {
 	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
-		ctx:         ctx,
 		serviceName: serviceName,
 		apmType:     typedAPMType,
 	}
-	baseLogger := initLogger(typedAPMType)
 	obs.Trace = newTrace(obs, serviceName, typedAPMType)
-	obs.Log = newLog(obs, baseLogger)
+	obs.Log = newLog(obs, logger)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler
 	return obs
-}
-
-// Context returns the current context from the Observability instance.
-func (o *Observability) Context() context.Context {
-	return o.ctx
-}
-
-// SetContext updates the context in the Observability instance.
-func (o *Observability) SetContext(ctx context.Context) {
-	o.ctx = ctx
 }

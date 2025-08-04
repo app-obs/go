@@ -2,7 +2,6 @@ package observability
 
 import (
 	"context"
-	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -18,21 +17,8 @@ func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAt
 	if len(attrs) > 0 {
 		otelAttrs := make([]attribute.KeyValue, 0, len(attrs))
 		for k, v := range attrs {
-			switch val := v.(type) {
-			case string:
-				otelAttrs = append(otelAttrs, attribute.String(k, val))
-			case int:
-				otelAttrs = append(otelAttrs, attribute.Int(k, val))
-			case int64:
-				otelAttrs = append(otelAttrs, attribute.Int64(k, val))
-			case bool:
-				otelAttrs = append(otelAttrs, attribute.Bool(k, val))
-			case float64:
-				otelAttrs = append(otelAttrs, attribute.Float64(k, val))
-			default:
-				// As a safe fallback, convert any other type to a string.
-				otelAttrs = append(otelAttrs, attribute.String(k, fmt.Sprintf("%v", v)))
-			}
+			// Use attribute.Any for more efficient and robust type handling.
+			otelAttrs = append(otelAttrs, attribute.Any(k, v))
 		}
 		span.SetAttributes(otelAttrs...)
 	}

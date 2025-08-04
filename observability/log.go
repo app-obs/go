@@ -17,9 +17,6 @@ import (
 )
 
 var (
-	baseLogger *slog.Logger
-	initOnce   sync.Once
-
 	// slogAttrPool reduces allocations by reusing slices for slog attributes.
 	slogAttrPool = sync.Pool{
 		New: func() interface{} {
@@ -39,18 +36,15 @@ var (
 	}
 )
 
-// initLogger initializes the global logger and sets it as the default.
-func initLogger(apmType APMType) *slog.Logger {
-	initOnce.Do(func() {
-		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			AddSource: true,
-			Level:     slog.LevelDebug,
-		})
-		logger := slog.New(newApmHandler(jsonHandler, apmType))
-		slog.SetDefault(logger)
-		baseLogger = logger
+// newLogger creates a new logger instance for a factory.
+func newLogger(apmType APMType, logLevel, spanLogLevel slog.Level) *slog.Logger {
+	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     logLevel,
 	})
-	return baseLogger
+	logger := slog.New(newApmHandler(jsonHandler, apmType, spanLogLevel))
+	slog.SetDefault(logger)
+	return logger
 }
 
 // Log wraps the slog logger.
@@ -67,14 +61,9 @@ func newLog(obs *Observability, baseLogger *slog.Logger) *Log {
 	}
 }
 
-func (l *Log) getCtx() context.Context {
-	return l.obs.Context()
-}
-
 // logc is the centralized logging function. It accepts a call depth
 // to ensure the log source is reported correctly, even from wrappers.
-func (l *Log) logc(level slog.Level, depth int, msg string, args ...any) {
-	ctx := l.getCtx()
+func (l *Log) logc(ctx context.Context, level slog.Level, depth int, msg string, args ...any) {
 	if !l.logger.Enabled(ctx, level) {
 		return
 	}
@@ -85,20 +74,20 @@ func (l *Log) logc(level slog.Level, depth int, msg string, args ...any) {
 	_ = l.logger.Handler().Handle(ctx, r)
 }
 
-func (l *Log) Debug(msg string, args ...any) {
-	l.logc(slog.LevelDebug, 3, msg, args...)
+func (l *Log) Debug(ctx context.Context, msg string, args ...any) {
+	l.logc(ctx, slog.LevelDebug, 3, msg, args...)
 }
 
-func (l *Log) Info(msg string, args ...any) {
-	l.logc(slog.LevelInfo, 3, msg, args...)
+func (l *Log) Info(ctx context.Context, msg string, args ...any) {
+	l.logc(ctx, slog.LevelInfo, 3, msg, args...)
 }
 
-func (l *Log) Warn(msg string, args ...any) {
-	l.logc(slog.LevelWarn, 3, msg, args...)
+func (l *Log) Warn(ctx context.Context, msg string, args ...any) {
+	l.logc(ctx, slog.LevelWarn, 3, msg, args...)
 }
 
-func (l *Log) Error(msg string, args ...any) {
-	l.logc(slog.LevelError, 3, msg, args...)
+func (l *Log) Error(ctx context.Context, msg string, args ...any) {
+	l.logc(ctx, slog.LevelError, 3, msg, args...)
 }
 
 func (l *Log) With(args ...any) *Log {
@@ -108,39 +97,110 @@ func (l *Log) With(args ...any) *Log {
 	}
 }
 
-// --- Standard Log Compatibility Methods ---
+// WithContext returns a contextual logger that has the context baked in.
+// This provides a more convenient API that matches the standard slog library.
+func (l *Log) WithContext(ctx context.Context) *ContextualLog {
+	return &ContextualLog{
+		log: l,
+		ctx: ctx,
+	}
+}
+
+// ContextualLog is a wrapper around the main Log object that holds a context.
+// Its methods match the standard slog API, removing the need to pass the context
+// on every call.
+type ContextualLog struct {
+	log *Log
+	ctx context.Context
+}
+
+// Debug logs at LevelDebug.
+func (c *ContextualLog) Debug(msg string, args ...any) {
+	c.log.logc(c.ctx, slog.LevelDebug, 3, msg, args...)
+}
+
+// Info logs at LevelInfo.
+func (c *ContextualLog) Info(msg string, args ...any) {
+	c.log.logc(c.ctx, slog.LevelInfo, 3, msg, args...)
+}
+
+// Warn logs at LevelWarn.
+func (c *ContextualLog) Warn(msg string, args ...any) {
+	c.log.logc(c.ctx, slog.LevelWarn, 3, msg, args...)
+}
+
+// Error logs at LevelError.
+func (c *ContextualLog) Error(msg string, args ...any) {
+	c.log.logc(c.ctx, slog.LevelError, 3, msg, args...)
+}
 
 // Printf formats and logs a message at the DEBUG level.
-func (l *Log) Printf(format string, v ...any) {
-	l.logc(slog.LevelDebug, 3, fmt.Sprintf(format, v...))
+func (c *ContextualLog) Printf(format string, v ...any) {
+	c.log.logc(c.ctx, slog.LevelDebug, 3, fmt.Sprintf(format, v...))
 }
 
 // Println formats and logs a message at the DEBUG level.
-func (l *Log) Println(v ...any) {
-	l.logc(slog.LevelDebug, 3, fmt.Sprint(v...))
+func (c *ContextualLog) Println(v ...any) {
+	c.log.logc(c.ctx, slog.LevelDebug, 3, fmt.Sprint(v...))
 }
 
 // Fatalf formats a message, logs it as a fatal error, and exits the application.
-func (l *Log) Fatalf(format string, v ...any) {
-	l.obs.ErrorHandler.Fatal(fmt.Sprintf(format, v...))
+func (c *ContextualLog) Fatalf(format string, v ...any) {
+	c.log.obs.ErrorHandler.Fatal(c.ctx, fmt.Sprintf(format, v...))
 }
 
 // Fatal logs a message as a fatal error and exits the application.
-func (l *Log) Fatal(v ...any) {
-	l.obs.ErrorHandler.Fatal(fmt.Sprint(v...))
+func (c *ContextualLog) Fatal(v ...any) {
+	c.log.obs.ErrorHandler.Fatal(c.ctx, fmt.Sprint(v...))
 }
 
 // Panicf formats a message, logs it as an error, and panics.
-func (l *Log) Panicf(format string, v ...any) {
+func (c *ContextualLog) Panicf(format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
-	l.logc(slog.LevelError, 3, msg)
+	c.log.logc(c.ctx, slog.LevelError, 3, msg)
 	panic(msg)
 }
 
 // Panic logs a message as an error and panics.
-func (l *Log) Panic(v ...any) {
+func (c *ContextualLog) Panic(v ...any) {
 	msg := fmt.Sprint(v...)
-	l.logc(slog.LevelError, 3, msg)
+	c.log.logc(c.ctx, slog.LevelError, 3, msg)
+	panic(msg)
+}
+
+// --- Standard Log Compatibility Methods ---
+
+// Printf formats and logs a message at the DEBUG level.
+func (l *Log) Printf(ctx context.Context, format string, v ...any) {
+	l.logc(ctx, slog.LevelDebug, 3, fmt.Sprintf(format, v...))
+}
+
+// Println formats and logs a message at the DEBUG level.
+func (l *Log) Println(ctx context.Context, v ...any) {
+	l.logc(ctx, slog.LevelDebug, 3, fmt.Sprint(v...))
+}
+
+// Fatalf formats a message, logs it as a fatal error, and exits the application.
+func (l *Log) Fatalf(ctx context.Context, format string, v ...any) {
+	l.obs.ErrorHandler.Fatal(ctx, fmt.Sprintf(format, v...))
+}
+
+// Fatal logs a message as a fatal error and exits the application.
+func (l *Log) Fatal(ctx context.Context, v ...any) {
+	l.obs.ErrorHandler.Fatal(ctx, fmt.Sprint(v...))
+}
+
+// Panicf formats a message, logs it as an error, and panics.
+func (l *Log) Panicf(ctx context.Context, format string, v ...any) {
+	msg := fmt.Sprintf(format, v...)
+	l.logc(ctx, slog.LevelError, 3, msg)
+	panic(msg)
+}
+
+// Panic logs a message as an error and panics.
+func (l *Log) Panic(ctx context.Context, v ...any) {
+	msg := fmt.Sprint(v...)
+	l.logc(ctx, slog.LevelError, 3, msg)
 	panic(msg)
 }
 
@@ -148,14 +208,16 @@ func (l *Log) Panic(v ...any) {
 
 type apmHandler struct {
 	slog.Handler
-	attrs   []slog.Attr
-	apmType APMType
+	attrs        []slog.Attr
+	apmType      APMType
+	spanLogLevel slog.Level
 }
 
-func newApmHandler(baseHandler slog.Handler, apmType APMType) *apmHandler {
+func newApmHandler(baseHandler slog.Handler, apmType APMType, spanLogLevel slog.Level) *apmHandler {
 	return &apmHandler{
-		Handler: baseHandler,
-		apmType: apmType,
+		Handler:      baseHandler,
+		apmType:      apmType,
+		spanLogLevel: spanLogLevel,
 	}
 }
 
@@ -239,7 +301,7 @@ func (h *apmHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 		err := extractError(r)
 		span.RecordError(err, trace.WithAttributes(otelAttrs...))
 		span.SetStatus(codes.Error, r.Message)
-	} else if r.Level >= slog.LevelInfo {
+	} else if r.Level >= h.spanLogLevel {
 		span.AddEvent(r.Message, trace.WithAttributes(otelAttrs...))
 	}
 }
@@ -253,7 +315,7 @@ func (h *apmHandler) handleDatadog(ctx context.Context, r slog.Record, attrs []s
 		if r.Level >= slog.LevelError {
 			err := extractError(r)
 			ddSpan.SetTag("error", err)
-		} else if r.Level >= slog.LevelInfo {
+		} else if r.Level >= h.spanLogLevel {
 			ddSpan.SetTag("event", r.Message)
 		}
 	}
@@ -300,17 +362,19 @@ func (h *apmHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	copy(newAttrs[len(h.attrs):], attrs)
 
 	return &apmHandler{
-		Handler: h.Handler.WithAttrs(attrs),
-		attrs:   newAttrs,
-		apmType: h.apmType,
+		Handler:      h.Handler.WithAttrs(attrs),
+		attrs:        newAttrs,
+		apmType:      h.apmType,
+		spanLogLevel: h.spanLogLevel,
 	}
 }
 
 func (h *apmHandler) WithGroup(name string) slog.Handler {
 	return &apmHandler{
-		Handler: h.Handler.WithGroup(name),
-		attrs:   h.attrs,
-		apmType: h.apmType,
+		Handler:      h.Handler.WithGroup(name),
+		attrs:        h.attrs,
+		apmType:      h.apmType,
+		spanLogLevel: h.spanLogLevel,
 	}
 }
 

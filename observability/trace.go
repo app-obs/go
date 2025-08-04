@@ -3,7 +3,9 @@ package observability
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"go.opentelemetry.io/otel"
@@ -36,65 +38,77 @@ func (s *noOpSpan) RecordError(error, ...trace.EventOption)  {}
 func (s *noOpSpan) SetStatus(codes.Code, string)             {}
 func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
 
-// traceImpl is an interface for a tracer.
-type traceImpl interface {
-	Start(ctx context.Context, spanName string) (context.Context, Span)
-}
-
 // unifiedSpan is a concrete implementation of the Span interface.
 type unifiedSpan struct {
 	trace.Span // OTel span
-	ddSpan     *tracer.Span
-	obs        *Observability
-	parentCtx  context.Context
+	ddSpan     tracer.Span
 	apmType    APMType
 }
 
 // End ends the span based on the APM type.
 func (s *unifiedSpan) End() {
-	s.obs.SetContext(s.parentCtx)
 	if s.apmType == Datadog {
-		s.ddSpan.Finish()
+		if s.ddSpan != nil {
+			s.ddSpan.Finish()
+		}
 	} else {
-		s.Span.End()
+		if s.Span != nil {
+			s.Span.End()
+		}
 	}
 }
 
 // AddEvent adds an event to the span.
 func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
 	if s.apmType == Datadog {
-		s.ddSpan.SetTag("event", name)
+		if s.ddSpan != nil {
+			s.ddSpan.SetTag("event", name)
+		}
 	} else {
-		s.Span.AddEvent(name, options...)
+		if s.Span != nil {
+			s.Span.AddEvent(name, options...)
+		}
 	}
 }
 
 // RecordError records an error on the span.
 func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
 	if s.apmType == Datadog {
-		s.ddSpan.SetTag("error", err)
+		if s.ddSpan != nil {
+			s.ddSpan.SetTag("error", err)
+		}
 	} else {
-		s.Span.RecordError(err, options...)
+		if s.Span != nil {
+			s.Span.RecordError(err, options...)
+		}
 	}
 }
 
 // SetStatus sets the status of the span.
 func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
 	if s.apmType == Datadog {
-		s.ddSpan.SetTag("status", description)
+		if s.ddSpan != nil {
+			s.ddSpan.SetTag("status", description)
+		}
 	} else {
-		s.Span.SetStatus(code, description)
+		if s.Span != nil {
+			s.Span.SetStatus(code, description)
+		}
 	}
 }
 
 // SetAttributes sets attributes on the span.
 func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
 	if s.apmType == Datadog {
-		for _, attr := range attrs {
-			s.ddSpan.SetTag(string(attr.Key), attr.Value.AsString())
+		if s.ddSpan != nil {
+			for _, attr := range attrs {
+				s.ddSpan.SetTag(string(attr.Key), attr.Value.AsString())
+			}
 		}
 	} else {
-		s.Span.SetAttributes(attrs...)
+		if s.Span != nil {
+			s.Span.SetAttributes(attrs...)
+		}
 	}
 }
 
@@ -112,12 +126,8 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 		return ctx, &noOpSpan{}
 	}
 
-	parentCtx := t.obs.Context()
-
 	span := &unifiedSpan{
-		obs:       t.obs,
-		parentCtx: parentCtx,
-		apmType:   apmType,
+		apmType: apmType,
 	}
 
 	var newCtx context.Context
@@ -131,7 +141,6 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 		span.Span = otelSpan
 	}
 
-	t.obs.SetContext(newCtx)
 	return newCtx, span
 }
 
@@ -154,12 +163,12 @@ func newTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
 
 // InjectHTTP injects the current trace context into the headers of an outgoing HTTP request.
 // It automatically handles the correct propagation format for the configured APM type.
-func (t *Trace) InjectHTTP(req *http.Request) {
+func (t *Trace) InjectHTTP(ctx context.Context, req *http.Request) {
 	switch t.apmType {
 	case OTLP:
-		otel.GetTextMapPropagator().Inject(t.obs.Context(), propagation.HeaderCarrier(req.Header))
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	case Datadog:
-		if span, ok := tracer.SpanFromContext(t.obs.Context()); ok {
+		if span, ok := tracer.SpanFromContext(ctx); ok {
 			tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
 		}
 	case None:
@@ -168,16 +177,16 @@ func (t *Trace) InjectHTTP(req *http.Request) {
 }
 
 // setupTracing initializes and configures the global TracerProvider based on APM type.
-func setupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, apmType string) (Shutdowner, error) {
-	switch normalizeAPMType(apmType) {
+func setupTracing(ctx context.Context, cfg factoryConfig, logger *slog.Logger) (Shutdowner, error) {
+	switch normalizeAPMType(cfg.ApmType) {
 	case OTLP:
-		return setupOTLP(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+		return setupOTLP(ctx, cfg, logger)
 	case Datadog:
-		return setupDatadog(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+		return setupDatadog(ctx, cfg, logger)
 	case None:
 		return &noOpShutdowner{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported APM type: %s", apmType)
+		return nil, fmt.Errorf("unsupported APM type: %s", cfg.ApmType)
 	}
 }
 
@@ -190,17 +199,17 @@ func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
 }
 
 // setupDatadog configures and initializes the Datadog Tracer.
-func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
+func setupDatadog(ctx context.Context, cfg factoryConfig, logger *slog.Logger) (Shutdowner, error) {
 	tracer.Start(
-		tracer.WithService(serviceName),
-		tracer.WithEnv(serviceEnv),
-		tracer.WithServiceVersion(serviceApp),
-		tracer.WithAgentAddr(apmURL),
+		tracer.WithService(cfg.ServiceName),
+		tracer.WithEnv(cfg.ServiceEnv),
+		tracer.WithServiceVersion(cfg.ServiceApp),
+		tracer.WithAgentAddr(cfg.ApmURL),
 	)
 
-	obs := NewObservability(ctx, serviceName, string(Datadog))
-	obs.Log.Info("Datadog Tracer initialized successfully",
-		"APMURL", apmURL,
+	obs := NewObservability(cfg.ServiceName, string(Datadog), logger)
+	obs.Log.Info(ctx, "Datadog Tracer initialized successfully",
+		"APMURL", cfg.ApmURL,
 		"APMType", Datadog,
 	)
 
@@ -217,8 +226,8 @@ func (d *datadogShutdowner) Shutdown(ctx context.Context) error {
 }
 
 // setupOTLP configures and initializes the OpenTelemetry TracerProvider.
-func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
-	exporter, err := newOTLPExporter(ctx, apmURL)
+func setupOTLP(ctx context.Context, cfg factoryConfig, logger *slog.Logger) (Shutdowner, error) {
+	exporter, err := newOTLPExporter(ctx, cfg.ApmURL)
 	if err != nil {
 		return nil, err
 	}
@@ -227,11 +236,11 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(serviceName),
-			attribute.String("application", serviceApp),
-			attribute.String("environment", serviceEnv),
+			semconv.ServiceNameKey.String(cfg.ServiceName),
+			attribute.String("application", cfg.ServiceApp),
+			attribute.String("environment", cfg.ServiceEnv),
 		)),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(cfg.Sampler),
 	)
 
 	otel.SetTracerProvider(tp)
@@ -240,19 +249,22 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 		propagation.Baggage{},
 	))
 
-	obs := NewObservability(ctx, serviceName, string(OTLP))
-	obs.Log.Info("OpenTelemetry TracerProvider initialized successfully",
-		"APMURL", apmURL,
+	obs := NewObservability(cfg.ServiceName, string(OTLP), logger)
+	obs.Log.Info(ctx, "OpenTelemetry TracerProvider initialized successfully",
+		"APMURL", cfg.ApmURL,
 		"APMType", OTLP,
+		"SampleRatio", fmt.Sprintf("%.2f", cfg.SampleRatio),
 	)
 
 	return tp, nil
 }
 
-// newOTLPExporter creates a new OTLP exporter.
+// newOTLPExporter creates a new OTLP exporter with a non-blocking client and a timeout.
 func newOTLPExporter(ctx context.Context, apmURL string) (sdktrace.SpanExporter, error) {
 	client := otlptracehttp.NewClient(
-		otlptracehttp.WithEndpointURL(apmURL),
+		otlptracehttp.WithEndpoint(apmURL),
+		otlptracehttp.WithTimeout(2*time.Second), // Prevent blocking
+		otlptracehttp.WithInsecure(),             // Use WithInsecure for HTTP
 	)
 	exporter, err := otlptrace.New(ctx, client)
 	if err != nil {

@@ -11,8 +11,6 @@ import (
 	"context"
 )
 
-// v0.250801.1
-
 // Shutdowner defines a contract for components that can be gracefully shut down.
 type Shutdowner interface {
 	Shutdown(ctx context.Context) error

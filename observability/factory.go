@@ -336,11 +336,16 @@ func (cs *compositeShutdowner) Shutdown(ctx context.Context) error {
 
 // ShutdownOrLog implements the Shutdowner interface.
 func (cs *compositeShutdowner) ShutdownOrLog(msg string) {
-	// Create a context with a timeout for the shutdown process.
+	shutdownWithDefaultTimeout(cs, msg)
+}
+
+// shutdownWithDefaultTimeout is a helper function to execute a shutdown call
+// with a default timeout and fallback logger.
+func shutdownWithDefaultTimeout(s Shutdowner, msg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := cs.Shutdown(ctx); err != nil {
+	if err := s.Shutdown(ctx); err != nil {
 		LogShutdownError(msg, err)
 	}
 }

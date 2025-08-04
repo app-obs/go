@@ -172,37 +172,56 @@ type Observability struct {
 
 ## Manual Span Management
 
-### `Observability.StartSpan`
+### `StartSpanFromCtx` (Recommended)
 
-Creates a new child span. This is a convenience method that accepts a `map[string]interface{}` for attributes, but has higher overhead than `StartSpanWith`.
+A convenience function that gets the observability container from the context and starts a new span. It returns the new context, the observability container, and the created span. This is the recommended way to create spans.
 
 ```go
-func (o *Observability) StartSpan(ctx context.Context, name string, attrs SpanAttributes) (context.Context, Span)
+func StartSpanFromCtx(ctx context.Context, name string, attrs SpanAttributes) (context.Context, *Observability, Span)
 ```
 
-### `Observability.StartSpanWith`
+### `StartSpanFromCtxWith` (Recommended, High-Performance)
 
-A high-performance method for creating a new child span. It accepts a variadic slice of `attribute.KeyValue`, which avoids the overhead of map processing and type switching. This is the preferred method for performance-critical code.
+A more performant version of `StartSpanFromCtx` that accepts a pre-built slice of `attribute.KeyValue` to avoid map processing overhead.
 
 ```go
-func (o *Observability) StartSpanWith(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, Span)
+func StartSpanFromCtxWith(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, *Observability, Span)
 ```
 
 **Example:**
 ```go
-ctx, span := obs.StartSpanWith(ctx, "ProcessItem",
+ctx, obs, span := observability.StartSpanFromCtxWith(ctx, "ProcessItem",
     observability.String("item.id", item.ID),
     observability.Int("item.size", item.Size),
 )
 defer span.End()
+
+// You can now use the obs object for logging, etc.
+obs.Log.Info("Processing item")
 ```
 
 ### `SpanAttributes`
 
-A convenience type alias for `map[string]interface{}` used by `StartSpan`.
+A convenience type alias for `map[string]interface{}` used by `StartSpanFromCtx`.
 
 ```go
 type SpanAttributes map[string]interface{}
+```
+
+### `Observability.StartSpan` (Advanced)
+
+Creates a new child span. This method is available on the `Observability` object but it is generally recommended to use the `StartSpanFromCtx` helper functions instead. It uses the context already stored within the `Observability` object.
+
+```go
+func (o *Observability) StartSpan(name string, attrs SpanAttributes) (context.Context, Span)
+```
+
+### `Observability.StartSpanWith` (Advanced, High-Performance)
+
+A high-performance method for creating a new child span from the `Observability` object.
+
+```go
+func (o *Observability) StartSpanWith(name string, attrs ...attribute.KeyValue) (context.Context, Span)
 ```
 
 ---

@@ -19,14 +19,13 @@ For a detailed guide to the public API, see the [API Reference](./doc/API.md).
 
 ## Getting Started
 
-The following is a complete example of how to instrument a simple HTTP service.
+The following is a complete example of how to instrument a simple HTTP service using the recommended helper functions.
 
 ```go
 package main
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	
 	"github.com/app-obs/go/observability"
@@ -37,21 +36,17 @@ func main() {
 	// Configuration is loaded from OBS_* environment variables by default.
 	obsFactory := observability.NewFactory(
 		observability.WithServiceName("my-service"),
-		observability.WithLogLevel(slog.LevelInfo), // Set a higher log level for production
-		observability.WithRuntimeMetrics(true),      // Enable runtime metrics
 	)
 	
-	// 2. Initialize all observability components (logger, tracer, etc.).
-	// This returns a single shutdown function for graceful termination.
-	shutdown, err := obsFactory.Setup(context.Background())
-	if err != nil {
-		// Use a background logger for startup errors.
-		bgObs := obsFactory.NewBackgroundObservability(context.Background())
-		bgObs.ErrorHandler.Fatal("Failed to setup observability", "error", err)
-	}
-	defer shutdown.Shutdown(context.Background())
+	// 2. Initialize all observability components and defer the shutdown.
+	// SetupOrExit will log a fatal error and exit if initialization fails.
+	shutdowner := obsFactory.SetupOrExit("Failed to setup observability")
+	defer shutdowner.ShutdownOrLog("Error during observability shutdown")
 
-	// 3. Instrument your HTTP handlers.
+	// 3. Get a background logger for startup and shutdown events.
+	bgObs := obsFactory.NewBackgroundObservability(context.Background())
+
+	// 4. Instrument your HTTP handlers.
 	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
 		// This one line handles context propagation, creates the root span,
 		// and provides the observability "toolbox".
@@ -62,22 +57,21 @@ func main() {
 		handleHello(ctx, w, r)
 	})
 
-	// Use a background logger for startup/shutdown events.
-	bgObs := obsFactory.NewBackgroundObservability(context.Background())
 	bgObs.Log.Info("Server starting on :8080")
-	http.ListenAndServe(":8080", nil)
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		bgObs.ErrorHandler.Fatal("Server failed to start", "error", err)
+	}
 }
 
 func handleHello(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	// 4. Get the observability object from the context.
-	obs := observability.ObsFromCtx(ctx)
-
-	// 5. Use the logger; trace and span IDs are injected automatically.
-	obs.Log.Info("Handling hello request", "user-agent", r.UserAgent())
-
-	// 6. Create nested spans for business logic.
-	ctx, span := obs.StartSpan(ctx, "say-hello", observability.SpanAttributes{"name": "world"})
+	// 5. Create a new span and get the observability container in one call.
+	ctx, obs, span := observability.StartSpanFromCtx(ctx, "say-hello", 
+		observability.SpanAttributes{"name": "world"},
+	)
 	defer span.End()
+
+	// 6. Use the logger; trace and span IDs are injected automatically into the log.
+	obs.Log.Info("Handling hello request", "user-agent", r.UserAgent())
 
 	w.Write([]byte("Hello, world!"))
 }

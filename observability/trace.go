@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"github.com/shirou/gopsutil/v3/process"
@@ -342,11 +341,7 @@ func (s *otlpShutdowner) Shutdown(ctx context.Context) error {
 
 // ShutdownOrLog implements the Shutdowner interface.
 func (s *otlpShutdowner) ShutdownOrLog(msg string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.Shutdown(ctx); err != nil {
-		LogShutdownError(msg, err)
-	}
+	shutdownWithDefaultTimeout(s, msg)
 }
 
 func setupMetrics(ctx context.Context) (Shutdowner, error) {

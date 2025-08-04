@@ -36,7 +36,7 @@ type Observability struct {
 }
 
 // NewObservability creates a new Observability instance.
-func NewObservability(ctx context.Context, serviceName string, apmType string, logSource bool, logLevel, traceLogLevel slog.Level) *Observability {
+func NewObservability(ctx context.Context, serviceName string, apmType string, logSource bool, logLevel, traceLogLevel slog.Level, metrics bool) *Observability {
 	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
 		ctx:         ctx,
@@ -49,6 +49,18 @@ func NewObservability(ctx context.Context, serviceName string, apmType string, l
 	obs.Log = newLog(obs, baseLogger)
 	obs.Metrics = newMetrics(obs)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler
+
+	if metrics {
+		shutdowner, err := setupMetrics(ctx)
+		if err != nil {
+			obs.Log.Error("failed to setup metrics", "error", err)
+		} else {
+			// We might need to manage this shutdowner, but for now, we don't have a composite shutdowner here.
+			// This will be handled in the factory.
+			_ = shutdowner
+		}
+	}
+
 	return obs
 }
 

@@ -20,5 +20,5 @@ func ObsFromCtx(ctx context.Context) *Observability {
 		return obs
 	}
 	// Return a default instance to prevent panics.
-	return NewObservability(context.Background(), "unknown", "none", true, slog.LevelDebug, slog.LevelInfo)
+	return NewObservability(context.Background(), "unknown", "none", true, slog.LevelDebug, slog.LevelInfo, false)
 }

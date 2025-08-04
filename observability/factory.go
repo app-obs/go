@@ -16,19 +16,18 @@ import (
 )
 
 // factoryConfig holds the static configuration for the observability system.
-// It is kept private to encourage the use of functional options.
 type factoryConfig struct {
 	ServiceName      string
 	ServiceApp       string
 	ServiceEnv       string
 	ApmType          string
+	MetricsType      string
 	ApmURL           string
 	LogSource        bool
 	SampleRate       float64
 	LogLevel         slog.Level
 	TraceLogLevel    slog.Level
 	AsynchronousLogs bool
-	RuntimeMetrics   bool
 }
 
 // Option is a function that configures a `factoryConfig`.
@@ -56,14 +55,20 @@ func WithServiceEnv(env string) Option {
 }
 
 // WithApmType sets the desired APM backend.
-// Valid options are "otlp", "datadog", or "none".
 func WithApmType(apmType string) Option {
 	return func(c *factoryConfig) {
 		c.ApmType = apmType
 	}
 }
 
-// WithApmURL sets the endpoint URL for the APM collector (e.g., "http://tempo:4318/v1/traces").
+// WithMetricsType sets the desired metrics backend.
+func WithMetricsType(metricsType string) Option {
+	return func(c *factoryConfig) {
+		c.MetricsType = metricsType
+	}
+}
+
+// WithApmURL sets the endpoint URL for the APM collector.
 func WithApmURL(url string) Option {
 	return func(c *factoryConfig) {
 		c.ApmURL = url
@@ -77,7 +82,7 @@ func WithLogSource(enabled bool) Option {
 	}
 }
 
-// WithSampleRate sets the trace sampling rate. A value of 1.0 traces everything, 0.5 traces 50%, etc.
+// WithSampleRate sets the trace sampling rate.
 func WithSampleRate(rate float64) Option {
 	return func(c *factoryConfig) {
 		c.SampleRate = rate
@@ -105,66 +110,49 @@ func WithAsynchronousLogging(enabled bool) Option {
 	}
 }
 
-// WithRuntimeMetrics enables the collection of automatic runtime metrics.
-func WithRuntimeMetrics(enabled bool) Option {
-	return func(c *factoryConfig) {
-		c.RuntimeMetrics = enabled
-	}
-}
-
 // Factory is responsible for creating Observability instances.
 type Factory struct {
 	config factoryConfig
 }
 
 // NewFactory creates a new observability factory using functional options.
-// It initializes with sensible defaults that can be overridden by the provided options.
 func NewFactory(opts ...Option) *Factory {
-	// Establish default configuration
 	config := factoryConfig{
 		ServiceName:      "unknown-service",
 		ServiceApp:       "unknown-app",
 		ServiceEnv:       "development",
 		ApmType:          "none",
-		ApmURL:           "", // No default URL
+		MetricsType:      "none",
+		ApmURL:           "",
 		LogSource:        true,
 		SampleRate:       1.0,
 		LogLevel:         slog.LevelDebug,
 		TraceLogLevel:    slog.LevelInfo,
-		AsynchronousLogs: false, // Default to reliable, blocking logs.
+		AsynchronousLogs: false,
 	}
 
-	// Apply user-provided options
 	for _, opt := range opts {
 		opt(&config)
 	}
 
-	// As a convenience, also read from standard environment variables if they exist,
-	// but only if the user hasn't already set the value via an option.
-	if config.ServiceName == "unknown-service" {
-		if val := os.Getenv("OBS_SERVICE_NAME"); val != "" {
-			config.ServiceName = val
-		}
+	// Read from environment variables, giving precedence to explicitly set options.
+	if val := os.Getenv("OBS_SERVICE_NAME"); val != "" && config.ServiceName == "unknown-service" {
+		config.ServiceName = val
 	}
-	if config.ServiceApp == "unknown-app" {
-		if val := os.Getenv("OBS_APPLICATION"); val != "" {
-			config.ServiceApp = val
-		}
+	if val := os.Getenv("OBS_APPLICATION"); val != "" && config.ServiceApp == "unknown-app" {
+		config.ServiceApp = val
 	}
-	if config.ServiceEnv == "development" {
-		if val := os.Getenv("OBS_ENVIRONMENT"); val != "" {
-			config.ServiceEnv = val
-		}
+	if val := os.Getenv("OBS_ENVIRONMENT"); val != "" && config.ServiceEnv == "development" {
+		config.ServiceEnv = val
 	}
-	if config.ApmType == "none" {
-		if val := os.Getenv("OBS_APM_TYPE"); val != "" {
-			config.ApmType = val
-		}
+	if val := os.Getenv("OBS_APM_TYPE"); val != "" && config.ApmType == "none" {
+		config.ApmType = val
 	}
-	if config.ApmURL == "" {
-		if val := os.Getenv("OBS_APM_URL"); val != "" {
-			config.ApmURL = val
-		}
+	if val := os.Getenv("OBS_METRICS_TYPE"); val != "" && config.MetricsType == "none" {
+		config.MetricsType = val
+	}
+	if val := os.Getenv("OBS_APM_URL"); val != "" && config.ApmURL == "" {
+		config.ApmURL = val
 	}
 	if val := os.Getenv("OBS_LOG_SOURCE"); val != "" {
 		if b, err := strconv.ParseBool(val); err == nil {
@@ -187,17 +175,11 @@ func NewFactory(opts ...Option) *Factory {
 			config.AsynchronousLogs = b
 		}
 	}
-	if val := os.Getenv("OBS_RUNTIME_METRICS"); val != "" {
-		if b, err := strconv.ParseBool(val); err == nil {
-			config.RuntimeMetrics = b
-		}
-	}
 
 	return &Factory{config: config}
 }
 
-// Setup initializes all observability components (logging, tracing, metrics)
-// and returns a composite shutdowner for graceful termination.
+// Setup initializes all observability components.
 func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 	var shutdowners []Shutdowner
 
@@ -206,27 +188,15 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 
 	traceShutdowner, err := f.setupTracing(ctx)
 	if err != nil {
-		// Attempt to shutdown any components that were already initialized.
-		_ = (&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
+		(&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
 		return nil, fmt.Errorf("failed to setup tracing: %w", err)
 	}
 	shutdowners = append(shutdowners, traceShutdowner)
 
-	// Metrics are only supported for the "otlp" APM type.
-	if normalizeAPMType(f.config.ApmType) != OTLP {
-		if f.config.RuntimeMetrics {
-			// Use a background logger to inform the user.
-			bgObs := f.NewBackgroundObservability(context.Background())
-			bgObs.Log.Info("Disabling runtime metrics; this feature is only supported when OBS_APM_TYPE is 'otlp'", "current_apm_type", f.config.ApmType)
-			f.config.RuntimeMetrics = false
-		}
-	}
-
-	if f.config.RuntimeMetrics {
+	if normalizeMetricsType(f.config.MetricsType) == OTLPMetrics {
 		metricsShutdowner, err := f.setupMetrics(ctx)
 		if err != nil {
-			// Attempt to shutdown any components that were already initialized.
-			_ = (&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
+			(&compositeShutdowner{shutdowners: shutdowners}).Shutdown(ctx)
 			return nil, fmt.Errorf("failed to setup metrics: %w", err)
 		}
 		shutdowners = append(shutdowners, metricsShutdowner)
@@ -235,9 +205,7 @@ func (f *Factory) Setup(ctx context.Context) (Shutdowner, error) {
 	return &compositeShutdowner{shutdowners: shutdowners}, nil
 }
 
-// SetupOrExit is a convenience wrapper around Setup that logs a fatal
-// message and exits the application if an error occurs. This is useful
-// for simplifying main application entry points.
+// SetupOrExit is a convenience wrapper around Setup.
 func (f *Factory) SetupOrExit(fatalMsg string) Shutdowner {
 	shutdowner, err := f.Setup(context.Background())
 	if err != nil {
@@ -259,22 +227,16 @@ func (f *Factory) setupMetrics(ctx context.Context) (Shutdowner, error) {
 	return setupMetrics(ctx)
 }
 
-// NewBackgroundObservability creates an Observability instance with a background context,
-// ideal for logging startup, shutdown, or other non-request-bound events.
+// NewBackgroundObservability creates an Observability instance with a background context.
 func (f *Factory) NewBackgroundObservability(ctx context.Context) *Observability {
-	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
+	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel, f.config.MetricsType == "otlp")
 }
 
-// StartSpanFromRequest is the primary entry point for instrumenting an incoming HTTP request.
-// It returns a new request with the full context, the final context itself, the created span, and the observability container.
+// StartSpanFromRequest instruments an incoming HTTP request.
 func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttributes) (*http.Request, context.Context, Span, *Observability) {
-	// Extract the trace context from the incoming headers.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel, f.config.MetricsType == "otlp")
 
-	// Create the observability container using the extracted context.
-	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
-
-	// Start the span. This returns a new context and a new observability object.
 	ctx, obs, span := obs.StartSpanWith(r.URL.Path,
 		attribute.String("http.method", r.Method),
 		attribute.String("http.url", r.URL.String()),
@@ -283,7 +245,6 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 		attribute.String("http.scheme", r.URL.Scheme),
 	)
 
-	// Apply custom attributes if they are provided.
 	if len(customAttrs) > 0 {
 		for _, attrs := range customAttrs {
 			for k, v := range attrs {
@@ -292,10 +253,7 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 		}
 	}
 
-	// Put the obs object into the new context that contains the span.
 	ctx = ctxWithObs(ctx, obs)
-
-	// Update the request with this final, fully-populated context.
 	r = r.WithContext(ctx)
 
 	return r, ctx, span, obs
@@ -316,7 +274,6 @@ func parseLogLevel(levelStr string) slog.Level {
 	}
 }
 
-// compositeShutdowner calls Shutdown on multiple shutdowners.
 type compositeShutdowner struct {
 	shutdowners []Shutdowner
 }
@@ -334,13 +291,10 @@ func (cs *compositeShutdowner) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// ShutdownOrLog implements the Shutdowner interface.
 func (cs *compositeShutdowner) ShutdownOrLog(msg string) {
 	shutdownWithDefaultTimeout(cs, msg)
 }
 
-// shutdownWithDefaultTimeout is a helper function to execute a shutdown call
-// with a default timeout and fallback logger.
 func shutdownWithDefaultTimeout(s Shutdowner, msg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

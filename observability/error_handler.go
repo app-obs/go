@@ -20,7 +20,7 @@ func newErrorHandler(obs *Observability) *ErrorHandler {
 
 // HTTP logs an error and writes a standard HTTP error response.
 func (h *ErrorHandler) HTTP(w http.ResponseWriter, msg string, statusCode int) {
-	h.obs.Log.logc(slog.LevelError, 3, msg)
+	h.obs.Log.Logc(slog.LevelError, 3, msg)
 	http.Error(w, msg, statusCode)
 }
 
@@ -29,12 +29,12 @@ func (h *ErrorHandler) HTTP(w http.ResponseWriter, msg string, statusCode int) {
 func (h *ErrorHandler) Record(span Span, err error, msg string) {
 	span.RecordError(err)
 	span.SetStatus(codes.Error, msg)
-	h.obs.Log.logc(slog.LevelError, 3, msg, "error", err)
+	h.obs.Log.Logc(slog.LevelError, 3, msg, "error", err)
 }
 
 // Fatal logs a fatal error and exits the application.
 // This is for unrecoverable errors during startup.
 func (h *ErrorHandler) Fatal(msg string, args ...any) {
-	h.obs.Log.logc(slog.LevelError, 3, msg, args...)
+	h.obs.Log.Logc(slog.LevelError, 3, msg, args...)
 	os.Exit(1)
 }

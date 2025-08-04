@@ -71,9 +71,9 @@ func (l *Log) getCtx() context.Context {
 	return l.obs.Context()
 }
 
-// logc is the centralized logging function. It accepts a call depth
+// Logc is the centralized logging function. It accepts a call depth
 // to ensure the log source is reported correctly, even from wrappers.
-func (l *Log) logc(level slog.Level, depth int, msg string, args ...any) {
+func (l *Log) Logc(level slog.Level, depth int, msg string, args ...any) {
 	ctx := l.getCtx()
 	if !l.logger.Enabled(ctx, level) {
 		return
@@ -86,19 +86,19 @@ func (l *Log) logc(level slog.Level, depth int, msg string, args ...any) {
 }
 
 func (l *Log) Debug(msg string, args ...any) {
-	l.logc(slog.LevelDebug, 3, msg, args...)
+	l.Logc(slog.LevelDebug, 3, msg, args...)
 }
 
 func (l *Log) Info(msg string, args ...any) {
-	l.logc(slog.LevelInfo, 3, msg, args...)
+	l.Logc(slog.LevelInfo, 3, msg, args...)
 }
 
 func (l *Log) Warn(msg string, args ...any) {
-	l.logc(slog.LevelWarn, 3, msg, args...)
+	l.Logc(slog.LevelWarn, 3, msg, args...)
 }
 
 func (l *Log) Error(msg string, args ...any) {
-	l.logc(slog.LevelError, 3, msg, args...)
+	l.Logc(slog.LevelError, 3, msg, args...)
 }
 
 func (l *Log) With(args ...any) *Log {
@@ -112,12 +112,12 @@ func (l *Log) With(args ...any) *Log {
 
 // Printf formats and logs a message at the DEBUG level.
 func (l *Log) Printf(format string, v ...any) {
-	l.logc(slog.LevelDebug, 3, fmt.Sprintf(format, v...))
+	l.Logc(slog.LevelDebug, 3, fmt.Sprintf(format, v...))
 }
 
 // Println formats and logs a message at the DEBUG level.
 func (l *Log) Println(v ...any) {
-	l.logc(slog.LevelDebug, 3, fmt.Sprint(v...))
+	l.Logc(slog.LevelDebug, 3, fmt.Sprint(v...))
 }
 
 // Fatalf formats a message, logs it as a fatal error, and exits the application.
@@ -133,14 +133,14 @@ func (l *Log) Fatal(v ...any) {
 // Panicf formats a message, logs it as an error, and panics.
 func (l *Log) Panicf(format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
-	l.logc(slog.LevelError, 3, msg)
+	l.Logc(slog.LevelError, 3, msg)
 	panic(msg)
 }
 
 // Panic logs a message as an error and panics.
 func (l *Log) Panic(v ...any) {
 	msg := fmt.Sprint(v...)
-	l.logc(slog.LevelError, 3, msg)
+	l.Logc(slog.LevelError, 3, msg)
 	panic(msg)
 }
 

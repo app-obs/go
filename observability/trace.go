@@ -43,58 +43,61 @@ type traceImpl interface {
 
 // unifiedSpan is a concrete implementation of the Span interface.
 type unifiedSpan struct {
-	trace.Span // OTel span
-	ddSpan     *tracer.Span
-	obs        *Observability
-	parentCtx  context.Context
-	apmType    APMType
+	span      interface{} // Can be trace.Span or *tracer.Span
+	obs       *Observability
+	parentCtx context.Context
 }
 
 // End ends the span based on the APM type.
 func (s *unifiedSpan) End() {
 	s.obs.SetContext(s.parentCtx)
-	if s.apmType == Datadog {
-		s.ddSpan.Finish()
-	} else {
-		s.Span.End()
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.End()
+	case tracer.Span:
+		span.Finish()
 	}
 }
 
 // AddEvent adds an event to the span.
 func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
-	if s.apmType == Datadog {
-		s.ddSpan.SetTag("event", name)
-	} else {
-		s.Span.AddEvent(name, options...)
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.AddEvent(name, options...)
+	case tracer.Span:
+		span.SetTag("event", name)
 	}
 }
 
 // RecordError records an error on the span.
 func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
-	if s.apmType == Datadog {
-		s.ddSpan.SetTag("error", err)
-	} else {
-		s.Span.RecordError(err, options...)
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.RecordError(err, options...)
+	case tracer.Span:
+		span.SetTag("error", err)
 	}
 }
 
 // SetStatus sets the status of the span.
 func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
-	if s.apmType == Datadog {
-		s.ddSpan.SetTag("status", description)
-	} else {
-		s.Span.SetStatus(code, description)
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.SetStatus(code, description)
+	case tracer.Span:
+		span.SetTag("status", description)
 	}
 }
 
 // SetAttributes sets attributes on the span.
 func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
-	if s.apmType == Datadog {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.SetAttributes(attrs...)
+	case tracer.Span:
 		for _, attr := range attrs {
-			s.ddSpan.SetTag(string(attr.Key), attr.Value.AsString())
+			span.SetTag(string(attr.Key), attr.Value.AsString())
 		}
-	} else {
-		s.Span.SetAttributes(attrs...)
 	}
 }
 
@@ -113,22 +116,20 @@ func (t *unifiedTracer) Start(ctx context.Context, spanName string) (context.Con
 	}
 
 	parentCtx := t.obs.Context()
-
 	span := &unifiedSpan{
 		obs:       t.obs,
 		parentCtx: parentCtx,
-		apmType:   apmType,
 	}
 
 	var newCtx context.Context
 	if apmType == Datadog {
 		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
-		span.ddSpan = ddSpan
+		span.span = ddSpan
 		newCtx = newDdCtx
 	} else {
 		var otelSpan trace.Span
 		newCtx, otelSpan = t.tracer.Start(ctx, spanName)
-		span.Span = otelSpan
+		span.span = otelSpan
 	}
 
 	t.obs.SetContext(newCtx)

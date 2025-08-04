@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -13,12 +14,15 @@ import (
 // factoryConfig holds the static configuration for the observability system.
 // It is kept private to encourage the use of functional options.
 type factoryConfig struct {
-	ServiceName string
-	ServiceApp  string
-	ServiceEnv  string
-	ApmType     string
-	ApmURL      string
-	LogSource   bool
+	ServiceName   string
+	ServiceApp    string
+	ServiceEnv    string
+	ApmType       string
+	ApmURL        string
+	LogSource     bool
+	SampleRate    float64
+	LogLevel      slog.Level
+	TraceLogLevel slog.Level
 }
 
 // Option is a function that configures a `factoryConfig`.
@@ -67,6 +71,27 @@ func WithLogSource(enabled bool) Option {
 	}
 }
 
+// WithSampleRate sets the trace sampling rate. A value of 1.0 traces everything, 0.5 traces 50%, etc.
+func WithSampleRate(rate float64) Option {
+	return func(c *factoryConfig) {
+		c.SampleRate = rate
+	}
+}
+
+// WithLogLevel sets the minimum level for logs written to stdout.
+func WithLogLevel(level slog.Level) Option {
+	return func(c *factoryConfig) {
+		c.LogLevel = level
+	}
+}
+
+// WithTraceLogLevel sets the minimum level for logs attached to trace spans.
+func WithTraceLogLevel(level slog.Level) Option {
+	return func(c *factoryConfig) {
+		c.TraceLogLevel = level
+	}
+}
+
 // Factory is responsible for creating Observability instances.
 type Factory struct {
 	config factoryConfig
@@ -77,12 +102,15 @@ type Factory struct {
 func NewFactory(opts ...Option) *Factory {
 	// Establish default configuration
 	config := factoryConfig{
-		ServiceName: "unknown-service",
-		ServiceApp:  "unknown-app",
-		ServiceEnv:  "development",
-		ApmType:     "none",
-		ApmURL:      "", // No default URL
-		LogSource:   true, // Default to enabled for development convenience.
+		ServiceName:   "unknown-service",
+		ServiceApp:    "unknown-app",
+		ServiceEnv:    "development",
+		ApmType:       "none",
+		ApmURL:        "", // No default URL
+		LogSource:     true,
+		SampleRate:    1.0,
+		LogLevel:      slog.LevelDebug,
+		TraceLogLevel: slog.LevelInfo,
 	}
 
 	// Apply user-provided options
@@ -117,11 +145,21 @@ func NewFactory(opts ...Option) *Factory {
 			config.ApmURL = val
 		}
 	}
-	// Allow overriding LogSource via environment variable.
 	if val := os.Getenv("OBS_LOG_SOURCE"); val != "" {
 		if b, err := strconv.ParseBool(val); err == nil {
 			config.LogSource = b
 		}
+	}
+	if val := os.Getenv("OBS_SAMPLE_RATE"); val != "" {
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			config.SampleRate = f
+		}
+	}
+	if val := os.Getenv("OBS_LOG_LEVEL"); val != "" {
+		config.LogLevel = parseLogLevel(val)
+	}
+	if val := os.Getenv("OBS_TRACE_LOG_LEVEL"); val != "" {
+		config.TraceLogLevel = parseLogLevel(val)
 	}
 
 	return &Factory{config: config}
@@ -130,12 +168,12 @@ func NewFactory(opts ...Option) *Factory {
 // NewBackgroundObservability creates an Observability instance with a background context,
 // ideal for logging startup, shutdown, or other non-request-bound events.
 func (f *Factory) NewBackgroundObservability(ctx context.Context) *Observability {
-	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource)
+	return NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
 }
 
 // SetupTracing initializes the global tracer provider based on the factory's configuration.
 func (f *Factory) SetupTracing(ctx context.Context) (Shutdowner, error) {
-	return setupTracing(ctx, f.config.ServiceName, f.config.ServiceApp, f.config.ServiceEnv, f.config.ApmURL, f.config.ApmType)
+	return setupTracing(ctx, f.config.ServiceName, f.config.ServiceApp, f.config.ServiceEnv, f.config.ApmURL, f.config.ApmType, f.config.SampleRate)
 }
 
 // StartSpanFromRequest is the primary entry point for instrumenting an incoming HTTP request.
@@ -145,26 +183,16 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 
 	// Create the observability container.
-	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource)
-
-	// Automatically create default attributes from the request.
-	defaultAttrs := SpanAttributes{
-		"http.method": r.Method,
-		"http.url":    r.URL.String(),
-		"http.target": r.URL.RequestURI(),
-		"http.host":   r.Host,
-		"http.scheme": r.URL.Scheme,
-	}
-
-	// Merge any custom attributes provided by the caller.
-	if len(customAttrs) > 0 {
-		for k, v := range customAttrs[0] {
-			defaultAttrs[k] = v
-		}
-	}
+	obs := NewObservability(ctx, f.config.ServiceName, f.config.ApmType, f.config.LogSource, f.config.LogLevel, f.config.TraceLogLevel)
 
 	// Start the span using the new method. This returns a context with the span.
-	ctx, span := obs.StartSpan(obs.Context(), r.URL.Path, defaultAttrs)
+	ctx, span := obs.StartSpanWith(obs.Context(), r.URL.Path,
+		attribute.String("http.method", r.Method),
+		attribute.String("http.url", r.URL.String()),
+		attribute.String("http.target", r.URL.RequestURI()),
+		attribute.String("http.host", r.Host),
+		attribute.String("http.scheme", r.URL.Scheme),
+	)
 
 	// Put the obs object into the new context that contains the span.
 	ctx = ctxWithObs(ctx, obs)
@@ -173,4 +201,19 @@ func (f *Factory) StartSpanFromRequest(r *http.Request, customAttrs ...SpanAttri
 	r = r.WithContext(ctx)
 
 	return r, ctx, span, obs
+}
+
+func parseLogLevel(levelStr string) slog.Level {
+	switch levelStr {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

@@ -215,12 +215,12 @@ func (t *Trace) InjectHTTP(req *http.Request) {
 }
 
 // setupTracing initializes and configures the global TracerProvider based on APM type.
-func setupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, apmType string) (Shutdowner, error) {
+func setupTracing(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL, apmType string, sampleRate float64) (Shutdowner, error) {
 	switch normalizeAPMType(apmType) {
 	case OTLP:
-		return setupOTLP(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+		return setupOTLP(ctx, serviceName, serviceApp, serviceEnv, apmURL, sampleRate)
 	case Datadog:
-		return setupDatadog(ctx, serviceName, serviceApp, serviceEnv, apmURL)
+		return setupDatadog(ctx, serviceName, serviceApp, serviceEnv, apmURL, sampleRate)
 	case None:
 		return &noOpShutdowner{}, nil
 	default:
@@ -237,18 +237,20 @@ func (n *noOpShutdowner) Shutdown(ctx context.Context) error {
 }
 
 // setupDatadog configures and initializes the Datadog Tracer.
-func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
+func setupDatadog(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
 	tracer.Start(
 		tracer.WithService(serviceName),
 		tracer.WithEnv(serviceEnv),
 		tracer.WithServiceVersion(serviceApp),
 		tracer.WithAgentAddr(apmURL),
+		tracer.WithSampleRate(sampleRate),
 	)
 
 	obs := NewObservability(ctx, serviceName, string(Datadog), true)
 	obs.Log.Info("Datadog Tracer initialized successfully",
 		"APMURL", apmURL,
 		"APMType", Datadog,
+		"SampleRate", sampleRate,
 	)
 
 	return &datadogShutdowner{}, nil
@@ -264,7 +266,7 @@ func (d *datadogShutdowner) Shutdown(ctx context.Context) error {
 }
 
 // setupOTLP configures and initializes the OpenTelemetry TracerProvider.
-func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string) (Shutdowner, error) {
+func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
 	exporter, err := newOTLPExporter(ctx, apmURL)
 	if err != nil {
 		return nil, err
@@ -278,7 +280,7 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 			attribute.String("application", serviceApp),
 			attribute.String("environment", serviceEnv),
 		)),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(sampleRate)),
 	)
 
 	otel.SetTracerProvider(tp)
@@ -291,6 +293,7 @@ func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL 
 	obs.Log.Info("OpenTelemetry TracerProvider initialized successfully",
 		"APMURL", apmURL,
 		"APMType", OTLP,
+		"SampleRate", sampleRate,
 	)
 
 	return tp, nil

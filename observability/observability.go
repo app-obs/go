@@ -9,6 +9,7 @@ package observability
 
 import (
 	"context"
+	"log/slog"
 )
 
 // Shutdowner defines a contract for components that can be gracefully shut down.
@@ -27,14 +28,14 @@ type Observability struct {
 }
 
 // NewObservability creates a new Observability instance.
-func NewObservability(ctx context.Context, serviceName string, apmType string, logSource bool) *Observability {
+func NewObservability(ctx context.Context, serviceName string, apmType string, logSource bool, logLevel, traceLogLevel slog.Level) *Observability {
 	typedAPMType := normalizeAPMType(apmType)
 	obs := &Observability{
 		ctx:         ctx,
 		serviceName: serviceName,
 		apmType:     typedAPMType,
 	}
-	baseLogger := initLogger(typedAPMType, logSource)
+	baseLogger := initLogger(typedAPMType, logSource, logLevel, traceLogLevel)
 	obs.Trace = newTrace(obs, serviceName, typedAPMType)
 	obs.Log = newLog(obs, baseLogger)
 	obs.ErrorHandler = newErrorHandler(obs) // Initialize the error handler

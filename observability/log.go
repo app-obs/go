@@ -41,13 +41,13 @@ var (
 )
 
 // initLogger initializes the global logger and sets it as the default.
-func initLogger(apmType APMType, logSource bool) *slog.Logger {
+func initLogger(apmType APMType, logSource bool, logLevel, traceLogLevel slog.Level) *slog.Logger {
 	initOnce.Do(func() {
 		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			AddSource: logSource,
-			Level:     slog.LevelDebug,
+			Level:     logLevel,
 		})
-		logger := slog.New(newApmHandler(jsonHandler, apmType))
+		logger := slog.New(newApmHandler(jsonHandler, apmType, traceLogLevel, logSource))
 		slog.SetDefault(logger)
 		baseLogger = logger
 	})
@@ -79,9 +79,9 @@ func (l *Log) Logc(level slog.Level, depth int, msg string, args ...any) {
 	if !l.logger.Enabled(ctx, level) {
 		return
 	}
-	var pcs [1]uintptr
-	runtime.Callers(depth, pcs[:]) // skip frames to get to the original caller
-	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	// The slog.Handler is responsible for adding the source location.
+	// We pass a zero PC here to avoid the overhead of runtime.Callers.
+	r := slog.NewRecord(time.Now(), level, msg, 0)
 	r.Add(args...)
 	_ = l.logger.Handler().Handle(ctx, r)
 }
@@ -110,9 +110,7 @@ func (l *Log) LogWithAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
 	if !l.logger.Enabled(ctx, level) {
 		return
 	}
-	var pcs [1]uintptr
-	runtime.Callers(3, pcs[:]) // skip [Callers, LogWithAttrs]
-	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	r := slog.NewRecord(time.Now(), level, msg, 0)
 	r.AddAttrs(attrs...)
 	_ = l.logger.Handler().Handle(ctx, r)
 }
@@ -164,18 +162,29 @@ func (l *Log) Panic(v ...any) {
 
 type apmHandler struct {
 	slog.Handler
-	attrs   []slog.Attr
-	apmType APMType
+	attrs         []slog.Attr
+	apmType       APMType
+	traceLogLevel slog.Level
+	addSource     bool
 }
 
-func newApmHandler(baseHandler slog.Handler, apmType APMType) *apmHandler {
+func newApmHandler(baseHandler slog.Handler, apmType APMType, traceLogLevel slog.Level, addSource bool) *apmHandler {
 	return &apmHandler{
-		Handler: baseHandler,
-		apmType: apmType,
+		Handler:       baseHandler,
+		apmType:       apmType,
+		traceLogLevel: traceLogLevel,
+		addSource:     addSource,
 	}
 }
 
 func (h *apmHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Add source location if enabled.
+	if h.addSource {
+		var pcs [1]uintptr
+		runtime.Callers(4, pcs[:]) // skip [Callers, Handle, logc, Info/Debug/etc.]
+		r.PC = pcs[0]
+	}
+
 	// Add trace and span IDs to the record's attributes
 	traceID, spanID := h.getTraceSpanID(ctx)
 	if traceID != "" {
@@ -185,28 +194,31 @@ func (h *apmHandler) Handle(ctx context.Context, r slog.Record) error {
 		r.AddAttrs(slog.String("span.id", spanID))
 	}
 
-	// Use a pooled slice for attributes to reduce allocations.
-	slogAttrsPtr := slogAttrPool.Get().(*[]slog.Attr)
-	defer func() {
-		// Reset the slice length and return it to the pool.
-		*slogAttrsPtr = (*slogAttrsPtr)[:0]
-		slogAttrPool.Put(slogAttrsPtr)
-	}()
-	slogAttrs := *slogAttrsPtr
+	// Only attach to spans if the level is high enough.
+	if r.Level >= h.traceLogLevel {
+		// Use a pooled slice for attributes to reduce allocations.
+		slogAttrsPtr := slogAttrPool.Get().(*[]slog.Attr)
+		defer func() {
+			// Reset the slice length and return it to the pool.
+			*slogAttrsPtr = (*slogAttrsPtr)[:0]
+			slogAttrPool.Put(slogAttrsPtr)
+		}()
+		slogAttrs := *slogAttrsPtr
 
-	slogAttrs = append(slogAttrs, h.attrs...)
-	r.Attrs(func(a slog.Attr) bool {
-		slogAttrs = append(slogAttrs, a)
-		return true
-	})
+		slogAttrs = append(slogAttrs, h.attrs...)
+		r.Attrs(func(a slog.Attr) bool {
+			slogAttrs = append(slogAttrs, a)
+			return true
+		})
 
-	switch h.apmType {
-	case OTLP:
-		h.handleOTLP(ctx, r, slogAttrs)
-	case Datadog:
-		h.handleDatadog(ctx, r, slogAttrs)
-	case None:
-		// Do nothing
+		switch h.apmType {
+		case OTLP:
+			h.handleOTLP(ctx, r, slogAttrs)
+		case Datadog:
+			h.handleDatadog(ctx, r, slogAttrs)
+		case None:
+			// Do nothing
+		}
 	}
 
 	return h.Handler.Handle(ctx, r)
@@ -255,7 +267,7 @@ func (h *apmHandler) handleOTLP(ctx context.Context, r slog.Record, slogAttrs []
 		err := extractError(r)
 		span.RecordError(err, trace.WithAttributes(otelAttrs...))
 		span.SetStatus(codes.Error, r.Message)
-	} else if r.Level >= slog.LevelInfo {
+	} else {
 		span.AddEvent(r.Message, trace.WithAttributes(otelAttrs...))
 	}
 }
@@ -269,7 +281,7 @@ func (h *apmHandler) handleDatadog(ctx context.Context, r slog.Record, attrs []s
 		if r.Level >= slog.LevelError {
 			err := extractError(r)
 			ddSpan.SetTag("error", err)
-		} else if r.Level >= slog.LevelInfo {
+		} else {
 			ddSpan.SetTag("event", r.Message)
 		}
 	}
@@ -316,17 +328,21 @@ func (h *apmHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	copy(newAttrs[len(h.attrs):], attrs)
 
 	return &apmHandler{
-		Handler: h.Handler.WithAttrs(attrs),
-		attrs:   newAttrs,
-		apmType: h.apmType,
+		Handler:       h.Handler.WithAttrs(attrs),
+		attrs:         newAttrs,
+		apmType:       h.apmType,
+		traceLogLevel: h.traceLogLevel,
+		addSource:     h.addSource,
 	}
 }
 
 func (h *apmHandler) WithGroup(name string) slog.Handler {
 	return &apmHandler{
-		Handler: h.Handler.WithGroup(name),
-		attrs:   h.attrs,
-		apmType: h.apmType,
+		Handler:       h.Handler.WithGroup(name),
+		attrs:         h.attrs,
+		apmType:       h.apmType,
+		traceLogLevel: h.traceLogLevel,
+		addSource:     h.addSource,
 	}
 }
 

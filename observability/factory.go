@@ -120,7 +120,21 @@ func WithTraceLogLevel(level slog.Level) Option {
 	}
 }
 
-// WithAsynchronousLogging enables non-blocking logging to an in-memory buffer.
+// WithAsynchronousLogging enables high-performance, non-blocking logging.
+//
+// When enabled, log records are sent to a buffered in-memory channel and written
+// to the underlying output (e.g., stdout) by a separate goroutine. This can
+// significantly improve application performance by preventing I/O waits on the
+// critical path.
+//
+// Trade-offs:
+//   - Performance: Greatly reduces logging overhead in the application's main goroutine.
+//   - Reliability: In case of a sudden application crash or if the buffer fills up
+//     (see OBS_ASYNC_LOG_BUFFER_SIZE), some recent log messages may be lost.
+//
+// Use this option for high-throughput services where performance is critical and
+// the potential loss of a small number of recent logs during a crash is an
+// acceptable trade-off. It is disabled by default for maximum reliability.
 func WithAsynchronousLogging(enabled bool) Option {
 	return func(c *factoryConfig) {
 		c.AsynchronousLogs = setting[bool]{Value: enabled, Source: sourceOption}

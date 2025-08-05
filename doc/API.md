@@ -103,7 +103,7 @@ The returned `Shutdowner` object has two methods:
 - `WithLogLevel(level slog.Level) Option`: Sets the minimum level for logs written to stdout. Default is `slog.LevelDebug`.
 - `WithTraceLogLevel(level slog.Level) Option`: Sets the minimum level for logs to be attached to trace spans as events. Default is `slog.LevelInfo`.
 - `WithLogSource(enabled bool) Option`: Toggles adding the source file and line number to logs. Enabled by default. Disabling this in production provides a performance boost.
-- `WithAsynchronousLogging(enabled bool) Option`: Enables non-blocking, buffered logging. This provides a significant performance gain but risks losing logs during a crash. Disabled by default.
+- `WithAsynchronousLogging(enabled bool) Option`: Enables high-performance, non-blocking logging. When enabled, log records are sent to a buffered in-memory channel and written to the underlying output by a separate goroutine. This can significantly improve application performance by preventing I/O waits on the critical path. It is disabled by default for maximum reliability. See the note on trade-offs under the corresponding environment variable.
 
 ### Metrics
 
@@ -126,6 +126,7 @@ As a convenience, the library will also read the following environment variables
 - `OBS_TRACE_LOG_LEVEL` (string): The minimum level for logs attached to trace spans. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
 - `OBS_LOG_SOURCE` (bool): Set to `"false"` to disable adding source code location to logs for a performance boost.
 - `OBS_ASYNC_LOGS` (bool): Set to `"true"` to enable high-performance, non-blocking logging.
+  - **Trade-offs**: When enabled, logging is significantly faster as it does not block application code on I/O. However, in the case of a sudden application crash or if the internal buffer is full, a small number of recent logs may be lost. This option is recommended for high-throughput services where performance is critical and this trade-off is acceptable.
 
 ---
 

@@ -139,9 +139,21 @@ The library is designed for high performance in production environments. Configu
 - `OBS_SAMPLE_RATE` (float): **Effect:** Controls the percentage of requests that are traced. `1.0` traces everything, `0.1` traces 10%. **Setting this to a lower value (e.g., 0.05) is the most effective way to reduce tracing overhead.**
 - `OBS_LOG_LEVEL` (string): **Effect:** Sets the minimum level for logs to be written to stdout. In a production environment, setting this to `"info"` or `"warn"` will significantly reduce log volume and improve performance. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`.
 - `OBS_TRACE_LOG_LEVEL` (string): **Effect:** Sets the minimum level for logs to be attached to trace spans as events. This allows you to keep stdout quiet while still capturing important events in your traces.
-- `OBS_ASYNC_LOGS` (bool): **Effect:** If set to `"true"`, enables non-blocking, buffered logging. This provides a major performance boost by decoupling application logic from I/O, but risks losing a small number of logs if the application crashes.
 - `OBS_LOG_SOURCE` (bool): **Effect:** If set to `"false"`, disables the automatic addition of source code file and line numbers to logs, providing a performance boost.
 - `OBS_RUNTIME_METRICS` (bool): **Effect:** If set to `"true"`, enables automatic runtime metrics collection. **Note:** This feature is only supported when `OBS_APM_TYPE` is set to `"otlp"`. It will be automatically disabled for other types.
+
+### Asynchronous Logging
+
+For high-throughput services where logging performance is critical, you can enable non-blocking, asynchronous logging by setting `OBS_ASYNC_LOGS="true"`.
+
+**How it Works:**
+When enabled, log records are sent to a buffered in-memory channel and written to the final output (e.g., `stdout`) by a background goroutine. This prevents application code from blocking on I/O operations.
+
+**Trade-offs:**
+- **Performance:** Greatly reduces logging overhead on the application's critical path.
+- **Reliability:** If the application crashes suddenly or the log volume exceeds the buffer capacity, a small number of the most recent log messages may be lost.
+
+This feature is disabled by default to prioritize reliability. Enable it only when the performance benefits outweigh the risk of minor log loss.
 
 ---
 

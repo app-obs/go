@@ -1,194 +1,73 @@
+
 package observability
 
 import (
 	"context"
 	"net/http"
-	"sync"
 
-	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
-var (
-	// unifiedSpanPool reduces allocations by reusing unifiedSpan objects.
-	unifiedSpanPool = sync.Pool{
-		New: func() interface{} {
-			return new(unifiedSpan)
-		},
-	}
-)
-
-// Span is a unified interface for a trace span, wrapping both OTel and Datadog spans.
+// Span is a unified interface for a trace span.
+// The underlying implementation is determined by build tags.
 type Span interface {
 	End()
 	AddEvent(string, ...trace.EventOption)
 	RecordError(error, ...trace.EventOption)
 	SetStatus(codes.Code, string)
 	SetAttributes(...attribute.KeyValue)
-
-	// OtelSpan provides an "escape hatch" to the underlying OpenTelemetry span.
-	// It returns nil if the APM type is not OTLP.
-	OtelSpan() trace.Span
-
-	// DatadogSpan provides an "escape hatch" to the underlying Datadog span.
-	// It returns nil if the APM type is not Datadog.
-	DatadogSpan() tracer.Span
-}
-
-// noOpSpan is a no-op implementation of the Span interface.
-type noOpSpan struct{}
-
-func (s *noOpSpan) End()                                     {}
-func (s *noOpSpan) AddEvent(string, ...trace.EventOption)    {}
-func (s *noOpSpan) RecordError(error, ...trace.EventOption)  {}
-func (s *noOpSpan) SetStatus(codes.Code, string)             {}
-func (s *noOpSpan) SetAttributes(...attribute.KeyValue)      {}
-func (s *noOpSpan) OtelSpan() trace.Span                     { return nil }
-func (s *noOpSpan) DatadogSpan() tracer.Span                 { var sp tracer.Span; return sp }
-
-// Start creates a new span based on the APM type.
-func (t *Trace) Start(ctx context.Context, spanName string) (context.Context, Span) {
-	if t.apmType == None {
-		return ctx, &noOpSpan{}
-	}
-
-	parentCtx := t.obs.Context()
-	span := unifiedSpanPool.Get().(*unifiedSpan)
-	span.obs = t.obs
-	span.parentCtx = parentCtx
-
-	var newCtx context.Context
-	if t.apmType == Datadog {
-		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
-		span.span = ddSpan
-		newCtx = newDdCtx
-	} else {
-		var otelSpan trace.Span
-		newCtx, otelSpan = t.tracer.Start(ctx, spanName)
-		span.span = otelSpan
-	}
-
-	return newCtx, span
-}
-
-// unifiedSpan is a concrete implementation of the Span interface.
-type unifiedSpan struct {
-	span      interface{} // Can be trace.Span or *tracer.Span
-	obs       *Observability
-	parentCtx context.Context
-}
-
-// End ends the span based on the APM type.
-func (s *unifiedSpan) End() {
-	switch span := s.span.(type) {
-	case trace.Span:
-		span.End()
-	case tracer.Span:
-		span.Finish()
-	}
-	// Reset the struct and put it back in the pool.
-	s.span = nil
-	s.obs = nil
-	s.parentCtx = nil
-	unifiedSpanPool.Put(s)
-}
-
-// AddEvent adds an event to the span.
-func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
-	switch span := s.span.(type) {
-	case trace.Span:
-		span.AddEvent(name, options...)
-	case tracer.Span:
-		span.SetTag("event", name)
-	}
-}
-
-// RecordError records an error on the span.
-func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
-	switch span := s.span.(type) {
-	case trace.Span:
-		span.RecordError(err, options...)
-	case tracer.Span:
-		span.SetTag("error", err)
-	}
-}
-
-// SetStatus sets the status of the span.
-func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
-	switch span := s.span.(type) {
-	case trace.Span:
-		span.SetStatus(code, description)
-	case tracer.Span:
-		span.SetTag("status", description)
-	}
-}
-
-// SetAttributes sets attributes on the span.
-func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
-	switch span := s.span.(type) {
-	case trace.Span:
-		span.SetAttributes(attrs...)
-	case tracer.Span:
-		for _, attr := range attrs {
-			span.SetTag(string(attr.Key), attr.Value.AsInterface())
-		}
-	}
-}
-
-// OtelSpan returns the underlying OpenTelemetry span, or nil.
-func (s *unifiedSpan) OtelSpan() trace.Span {
-	if span, ok := s.span.(trace.Span); ok {
-		return span
-	}
-	return nil
-}
-
-// DatadogSpan returns the underlying Datadog span, or nil.
-func (s *unifiedSpan) DatadogSpan() tracer.Span {
-	if span, ok := s.span.(tracer.Span); ok {
-		return span
-	}
-	var ddSpan tracer.Span
-	return ddSpan
 }
 
 // Trace holds the active tracer and APM type.
 type Trace struct {
 	obs     *Observability
-	tracer  trace.Tracer // OTel tracer
 	apmType APMType
 }
 
-// OtelTracer provides an "escape hatch" to the underlying OpenTelemetry tracer.
-func (t *Trace) OtelTracer() trace.Tracer {
-	return t.tracer
+// Start creates a new span. The actual implementation is provided by a
+// build-specific file (`trace_otlp.go`, `trace_datadog.go`, etc.).
+func (t *Trace) Start(ctx context.Context, spanName string) (context.Context, Span) {
+	return startSpan(t, ctx, spanName)
+}
+
+// InjectHTTP injects the current trace context into HTTP headers. The actual
+// implementation is provided by a build-specific file.
+func (t *Trace) InjectHTTP(req *http.Request) {
+	injectHTTP(t, req)
 }
 
 // newTrace creates a new Trace instance.
 func newTrace(obs *Observability, serviceName string, apmType APMType) *Trace {
+	// The serviceName is used by the OTel tracer, which is initialized
+	// in the build-specific files.
+	initializeTracer(serviceName)
+
 	return &Trace{
 		obs:     obs,
-		tracer:  otel.Tracer(serviceName),
 		apmType: apmType,
 	}
 }
 
-// InjectHTTP injects the current trace context into the headers of an outgoing HTTP request.
-// It automatically handles the correct propagation format for the configured APM type.
-func (t *Trace) InjectHTTP(req *http.Request) {
-	ctx := t.obs.Context() // Always use the context from the parent observability object.
-	switch t.apmType {
-	case OTLP:
-		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
-	case Datadog:
-		if span, ok := tracer.SpanFromContext(ctx); ok {
-			tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
-		}
-	case None:
-		// Do nothing
-	}
-}
+/*
+The following functions and variables must be implemented by a build-specific file
+(e.g., trace_otlp.go, trace_datadog.go, trace_all.go, trace_none.go).
+This approach ensures that we only compile the code for the selected APM provider.
+
+var (
+	// startSpan creates a new span.
+	startSpan func(t *Trace, ctx context.Context, spanName string) (context.Context, Span)
+
+	// injectHTTP injects the trace context into HTTP headers.
+	injectHTTP func(t *Trace, req *http.Request)
+
+	// initializeTracer sets up the tracer for the given service name.
+	initializeTracer func(serviceName string)
+)
+*/
+var (
+	startSpan        func(t *Trace, ctx context.Context, spanName string) (context.Context, Span)
+	injectHTTP       func(t *Trace, req *http.Request)
+	initializeTracer func(serviceName string)
+)

@@ -4,88 +4,94 @@ package observability
 
 import (
 	"context"
-	"fmt"
+	"net/http"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
-// setupOTLP configures and initializes the OpenTelemetry TracerProvider and MeterProvider.
-func setupOTLP(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
-	res := resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceNameKey.String(serviceName),
-		attribute.String("application", serviceApp),
-		attribute.String("environment", serviceEnv),
-	)
-
-	// Set up the trace exporter
-	traceExporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(apmURL))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(sampleRate)),
-	)
-
-	// Set up the metric exporter
-	metricExporter, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(apmURL))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP metric exporter: %w", err)
-	}
-
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
-		sdkmetric.WithResource(res),
-	)
-
-	otel.SetTracerProvider(tp)
-	otel.SetMeterProvider(mp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-
-	// Return a composite shutdowner for both providers
-	return &compositeShutdowner{
-		shutdowners: []Shutdowner{
-			&otlpShutdowner{provider: tp, name: "TracerProvider"},
-			&otlpShutdowner{provider: mp, name: "MeterProvider"},
+var (
+	// unifiedSpanPool reduces allocations by reusing unifiedSpan objects.
+	unifiedSpanPool = sync.Pool{
+		New: func() interface{} {
+			return new(unifiedSpan)
 		},
-	}, nil
-}
-
-// otlpShutdowner is a wrapper for OpenTelemetry providers to implement the full Shutdowner interface.
-type otlpShutdowner struct {
-	provider interface {
-		Shutdown(context.Context) error
 	}
-	name string
+	otelTracer trace.Tracer
+)
+
+// unifiedSpan is a concrete implementation of the Span interface for OTLP.
+type unifiedSpan struct {
+	span trace.Span
+	obs  *Observability
 }
 
-// Shutdown calls the underlying provider's Shutdown method.
-func (s *otlpShutdowner) Shutdown(ctx context.Context) error {
-	if err := s.provider.Shutdown(ctx); err != nil {
-		return fmt.Errorf("failed to shutdown %s: %w", s.name, err)
-	}
-	return nil
+// End ends the span.
+func (s *unifiedSpan) End() {
+	s.span.End()
+	s.span = nil
+	s.obs = nil
+	unifiedSpanPool.Put(s)
 }
 
-// ShutdownOrLog implements the Shutdowner interface.
-func (s *otlpShutdowner) ShutdownOrLog(msg string) {
-	shutdownWithDefaultTimeout(s, msg)
+// AddEvent adds an event to the span.
+func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
+	s.span.AddEvent(name, options...)
+}
+
+// RecordError records an error on the span.
+func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
+	s.span.RecordError(err, options...)
+}
+
+// SetStatus sets the status of the span.
+func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
+	s.span.SetStatus(code, description)
+}
+
+// SetAttributes sets attributes on the span.
+func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
+	s.span.SetAttributes(attrs...)
 }
 
 func init() {
-	setupFuncs[OTLP] = setupOTLP
+	startSpan = func(t *Trace, ctx context.Context, spanName string) (context.Context, Span) {
+		if t.apmType != OTLP {
+			// When built with the otlp tag, only otlp is supported.
+			return ctx, &noOpSpan{}
+		}
+
+		span := unifiedSpanPool.Get().(*unifiedSpan)
+		span.obs = t.obs
+
+		newCtx, otelSpan := otelTracer.Start(ctx, spanName)
+		span.span = otelSpan
+
+		return newCtx, span
+	}
+
+	injectHTTP = func(t *Trace, req *http.Request) {
+		if t.apmType != OTLP {
+			return
+		}
+		ctx := t.obs.Context()
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	}
+
+	initializeTracer = func(serviceName string) {
+		otelTracer = otel.Tracer(serviceName)
+	}
 }
+
+// noOpSpan is a no-op implementation of the Span interface.
+type noOpSpan struct{}
+
+func (s *noOpSpan) End()                                  {}
+func (s *noOpSpan) AddEvent(string, ...trace.EventOption) {}
+func (s *noOpSpan) RecordError(error, ...trace.EventOption) {}
+func (s *noOpSpan) SetStatus(codes.Code, string)          {}
+func (s *noOpSpan) SetAttributes(...attribute.KeyValue)   {}

@@ -1,22 +1,35 @@
-//go:build !datadog && !otlp
+//go:build none
 
 package observability
 
 import (
 	"context"
-	"fmt"
+	"net/http"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
-func setupNone(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
-	return &noOpShutdowner{}, nil
+func init() {
+	startSpan = func(t *Trace, ctx context.Context, spanName string) (context.Context, Span) {
+		return ctx, &noOpSpan{}
+	}
+
+	injectHTTP = func(t *Trace, req *http.Request) {
+		// Do nothing
+	}
+
+	initializeTracer = func(serviceName string) {
+		// Do nothing
+	}
 }
 
-func init() {
-	setupFuncs[None] = setupNone
-	setupFuncs[Datadog] = func(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
-		return nil, fmt.Errorf("Datadog APM is not included in this build. Please use the 'datadog' build tag.")
-	}
-	setupFuncs[OTLP] = func(ctx context.Context, serviceName, serviceApp, serviceEnv, apmURL string, sampleRate float64) (Shutdowner, error) {
-		return nil, fmt.Errorf("OTLP APM is not included in this build. Please use the 'otlp' build tag.")
-	}
-}
+// noOpSpan is a no-op implementation of the Span interface.
+type noOpSpan struct{}
+
+func (s *noOpSpan) End()                                  {}
+func (s *noOpSpan) AddEvent(string, ...trace.EventOption) {}
+func (s *noOpSpan) RecordError(error, ...trace.EventOption) {}
+func (s *noOpSpan) SetStatus(codes.Code, string)          {}
+func (s *noOpSpan) SetAttributes(...attribute.KeyValue)   {}

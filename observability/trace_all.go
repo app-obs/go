@@ -1,4 +1,4 @@
-//go:build datadog
+//go:build !datadog && !otlp && !none
 
 package observability
 
@@ -8,8 +8,10 @@ import (
 	"sync"
 
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -20,48 +22,67 @@ var (
 			return new(unifiedSpan)
 		},
 	}
+	otelTracer trace.Tracer
 )
 
-// unifiedSpan is a concrete implementation of the Span interface for Datadog.
+// unifiedSpan is a concrete implementation of the Span interface.
 type unifiedSpan struct {
-	span interface{}
-	obs  *Observability
+	span      interface{} // Can be trace.Span or tracer.Span
+	obs       *Observability
+	parentCtx context.Context
 }
 
-// End ends the span.
+// End ends the span based on the APM type.
 func (s *unifiedSpan) End() {
-	if span, ok := s.span.(tracer.Span); ok {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.End()
+	case tracer.Span:
 		span.Finish()
 	}
+	// Reset the struct and put it back in the pool.
 	s.span = nil
 	s.obs = nil
+	s.parentCtx = nil
 	unifiedSpanPool.Put(s)
 }
 
 // AddEvent adds an event to the span.
 func (s *unifiedSpan) AddEvent(name string, options ...trace.EventOption) {
-	if span, ok := s.span.(tracer.Span); ok {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.AddEvent(name, options...)
+	case tracer.Span:
 		span.SetTag("event", name)
 	}
 }
 
 // RecordError records an error on the span.
 func (s *unifiedSpan) RecordError(err error, options ...trace.EventOption) {
-	if span, ok := s.span.(tracer.Span); ok {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.RecordError(err, options...)
+	case tracer.Span:
 		span.SetTag("error", err)
 	}
 }
 
 // SetStatus sets the status of the span.
 func (s *unifiedSpan) SetStatus(code codes.Code, description string) {
-	if span, ok := s.span.(tracer.Span); ok {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.SetStatus(code, description)
+	case tracer.Span:
 		span.SetTag("status", description)
 	}
 }
 
 // SetAttributes sets attributes on the span.
 func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
-	if span, ok := s.span.(tracer.Span); ok {
+	switch span := s.span.(type) {
+	case trace.Span:
+		span.SetAttributes(attrs...)
+	case tracer.Span:
 		for _, attr := range attrs {
 			span.SetTag(string(attr.Key), attr.Value.AsInterface())
 		}
@@ -70,32 +91,45 @@ func (s *unifiedSpan) SetAttributes(attrs ...attribute.KeyValue) {
 
 func init() {
 	startSpan = func(t *Trace, ctx context.Context, spanName string) (context.Context, Span) {
-		if t.apmType != Datadog {
-			// When built with the datadog tag, only datadog is supported.
+		if t.apmType == None {
 			return ctx, &noOpSpan{}
 		}
 
+		parentCtx := t.obs.Context()
 		span := unifiedSpanPool.Get().(*unifiedSpan)
 		span.obs = t.obs
+		span.parentCtx = parentCtx
 
-		ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
-		span.span = ddSpan
+		var newCtx context.Context
+		if t.apmType == Datadog {
+			ddSpan, newDdCtx := tracer.StartSpanFromContext(ctx, spanName)
+			span.span = ddSpan
+			newCtx = newDdCtx
+		} else {
+			var otelSpan trace.Span
+			newCtx, otelSpan = otelTracer.Start(ctx, spanName)
+			span.span = otelSpan
+		}
 
-		return newDdCtx, span
+		return newCtx, span
 	}
 
 	injectHTTP = func(t *Trace, req *http.Request) {
-		if t.apmType != Datadog {
-			return
-		}
-		ctx := t.obs.Context()
-		if span, ok := tracer.SpanFromContext(ctx); ok {
-			tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
+		ctx := t.obs.Context() // Always use the context from the parent observability object.
+		switch t.apmType {
+		case OTLP:
+			otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+		case Datadog:
+			if span, ok := tracer.SpanFromContext(ctx); ok {
+				tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header))
+			}
+		case None:
+			// Do nothing
 		}
 	}
 
 	initializeTracer = func(serviceName string) {
-		// Datadog tracer is initialized via tracer.Start(), not here.
+		otelTracer = otel.Tracer(serviceName)
 	}
 }
 

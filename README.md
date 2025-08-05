@@ -6,6 +6,10 @@ Its primary goal is to make robust instrumentation easy, consistent, and highly 
 
 For a detailed guide to the public API, see the [API Reference](./doc/API.md).
 
+## Runnable Example
+
+This repository contains the source code for the library itself. For a complete, runnable project demonstrating how to use this library in a real-world microservices environment, please see the [**example-services**](https://github.com/app-obs/example-services) repository.
+
 ## Features
 
 - **Unified Tracing API**: Write your instrumentation code once and seamlessly switch between `OTLP` and `Datadog` backends via configuration.
@@ -16,6 +20,44 @@ For a detailed guide to the public API, see the [API Reference](./doc/API.md).
 - **Granular Log Levels**: Independently control the log level for `stdout` and the level for logs attached to trace spans, allowing for quiet production logging with targeted trace verbosity.
 - **Optimized HTTP Instrumentation**: A single-line, zero-allocation call (`obsFactory.StartSpanFromRequest(r)`) instruments an incoming HTTP request, handling context propagation, span naming, and standard attributes.
 - **Zero-Allocation Primitives**: High-performance methods like `StartSpanWith` and `LogWithAttrs` are available for performance-critical code paths, avoiding memory allocations.
+
+## Build Tags for Conditional Compilation
+
+This library uses Go build tags to produce optimized, smaller binaries for production. By specifying a build tag, you instruct the Go compiler to include only the code for the backends you need.
+
+-   **Why use build tags?** To significantly reduce the size of your final compiled application by excluding unused tracer and metrics libraries.
+-   **What happens if you don't use a tag?** By default (no tags), the library compiles in **all** APM backends (OTLP and Datadog). This "kitchen sink" mode is useful for development, as it allows you to switch backends using the `OBS_APM_TYPE` environment variable without recompiling. For production, it is strongly recommended to use a build tag.
+
+### Available Tags
+
+-   `otlp`: Includes only the OpenTelemetry tracer.
+-   `datadog`: Includes only the Datadog tracer.
+-   `none`: Excludes all tracing code.
+-   `metrics`: Includes the OpenTelemetry metrics SDK and enables automatic Go runtime metrics collection. This tag **must be combined** with the `otlp` tag.
+
+### How to Use
+
+You can specify tags using the `-tags` flag. For multiple tags, use a comma-separated string.
+
+**OTLP Tracing with Metrics (Recommended for OTLP):**
+```sh
+go build -tags "otlp,metrics" -o my-service .
+```
+
+**OTLP Tracing only:**
+```sh
+go build -tags "otlp" -o my-service .
+```
+
+**Datadog Tracing only:**
+```sh
+go build -tags "datadog" -o my-service .
+```
+
+**No Tracing or Metrics (Smallest Binary):**
+```sh
+go build -tags "none" -o my-service .
+```
 
 ## Getting Started
 

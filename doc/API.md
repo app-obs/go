@@ -98,6 +98,10 @@ The returned `Shutdowner` object has two methods:
 - `WithApmURL(url string) Option`: Sets the APM collector URL.
 - `WithSampleRate(rate float64) Option`: Sets the trace sampling rate. `1.0` traces every request, `0.1` traces 10%. Default is `1.0`. This is the most effective way to control tracing overhead in production.
 
+**Note on Build Tags:** For production builds, it is highly recommended to use Go build tags to compile your application with only the necessary backends. This significantly reduces the binary size. If no tag is specified, the library includes all backends, allowing runtime selection via `WithApmType` or `OBS_APM_TYPE`, which is ideal for development. See the main `README.md` for a full guide on using the `otlp`, `datadog`, `none`, and `metrics` tags.
+
+**Example:** `go build -tags "otlp,metrics" -o my-service .`
+
 ### Logging
 
 - `WithLogLevel(level slog.Level) Option`: Sets the minimum level for logs written to stdout. Default is `slog.LevelDebug`.

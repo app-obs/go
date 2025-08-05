@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

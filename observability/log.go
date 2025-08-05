@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -281,7 +281,7 @@ func (h *apmHandler) getTraceSpanID(ctx context.Context) (traceID, spanID string
 		}
 	} else if h.apmType == Datadog {
 		if ddSpan, ok := tracer.SpanFromContext(ctx); ok {
-			traceID = ddSpan.Context().TraceID()
+			traceID = strconv.FormatUint(ddSpan.Context().TraceID(), 10)
 			spanID = strconv.FormatUint(ddSpan.Context().SpanID(), 10)
 		}
 	}
